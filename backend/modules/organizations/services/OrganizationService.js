@@ -19,6 +19,7 @@ const { scopedWhere }     = require('../../../helpers/tenantScope');
 const { sendOrgInvitation } = require('../../../helpers/emailService');
 const paginate     = require('../../../helpers/paginate');
 const { createFreeSubscription } = require('../../billing/services/BillingService'); // A05
+const { notify }  = require('../../notifications/services/NotificationService'); // A08
 
 const INVITE_TTL_DAYS = 7;
 
@@ -165,6 +166,26 @@ async function inviteMember(req, res) {
     await sendOrgInvitation(normalizedEmail, req.organization.name, inviteLinkFor(rawToken));
   } catch (sendErr) {
     console.error('[OrganizationService.inviteMember] invitation email failed:', sendErr.message);
+  }
+
+  // In-app notification, ON TOP OF the direct email above — not instead of it.
+  // Only fires when the invited address already has an account; an unregistered
+  // invitee has nowhere to log in and see an inbox yet.
+  const invitedUser = await prisma.user.findFirst({ where: { email: { equals: normalizedEmail, mode: 'insensitive' } } });
+  if (invitedUser) {
+    try {
+      await notify({
+        userId: invitedUser.id,
+        organizationId: req.organizationId,
+        type: 'org_invitation',
+        title: `You've been invited to ${req.organization.name}`,
+        body: `${req.user.name || req.user.userName} invited you to join ${req.organization.name} as ${role}.`,
+        data: { organizationId: req.organizationId, role },
+        channels: ['in_app'],
+      });
+    } catch (notifyErr) {
+      console.error('[OrganizationService.inviteMember] in-app notification failed:', notifyErr.message);
+    }
   }
 
   await auditLogger('ORG_MEMBER_INVITED', req.user, req, { organizationId: req.organizationId });

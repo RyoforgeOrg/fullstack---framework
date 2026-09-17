@@ -95,7 +95,10 @@ async function makeUser(prefix) {
   const email    = `${userName}@test.local`;
   const password = 'Str0ng!Passw0rd';
   const user = await prisma.user.create({
-    data: { userName, email, name: 'Billing Test', password: bcrypt.hashSync(password, 12), role: 'admin' },
+    // emailVerifiedAt: org creation is gated on a confirmed email
+    // (requireVerifiedEmail) — this suite's actors create orgs, so they must
+    // already be verified, same as organizations.integration.test.js's makeUser.
+    data: { userName, email, name: 'Billing Test', password: bcrypt.hashSync(password, 12), role: 'admin', emailVerifiedAt: new Date() },
   });
   const login = await request.post('/api/v1/common/auth/login').send({ userName, password });
   assert.strictEqual(login.status, 200, 'seed user should be able to log in');

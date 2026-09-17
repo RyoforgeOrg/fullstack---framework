@@ -14,6 +14,7 @@ const apiResponse = require('../../../helpers/apiResponse');
 const { generateToken, generateRefreshToken } = require('../../../helpers/generateToken');
 const { auditLogger } = require('../../../helpers/auditLogger');
 const { sendPasswordResetOtp, sendEmailVerification } = require('../../../helpers/emailService');
+const { notify }  = require('../../notifications/services/NotificationService'); // A08
 const bcrypt      = require('bcrypt');
 const crypto      = require('crypto');
 const otpGenerator = require('otp-generator');
@@ -701,6 +702,21 @@ async function changePassword(req, res) {
     const hashed   = await bcrypt.hash(newPassword, 12);
     const reissued = await revokeOthersAndReissue(req, user.id, { password: hashed });
     setRefreshCookie(res, reissued.refreshToken);
+
+    // Security-category notification — never opted out of (see
+    // notificationCategories.js). Best-effort: a failure here must not turn a
+    // successful password change into a 500.
+    try {
+      await notify({
+        userId: user.id,
+        type: 'password_changed',
+        title: 'Your password was changed',
+        body: 'If this wasn\'t you, reset your password immediately and review your active sessions.',
+        channels: ['in_app', 'email'],
+      });
+    } catch (notifyErr) {
+      console.error('[AuthService.changePassword] notification failed:', notifyErr.message);
+    }
 
     await auditLogger('PASSWORD_CHANGED', req.user, req);
     return apiResponse.send(res, 'SUCCESS', {
