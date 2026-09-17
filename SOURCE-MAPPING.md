@@ -47,8 +47,9 @@ Every file in this repo, what it does, and what you need to customize per produc
 
 | File | Status | What it does | What to customize |
 |------|--------|--------------|------------------|
-| `backend/prisma/schema.prisma` | 🔌 | `User`, `RefreshToken`, `AuditLog` base models + multi-tenancy (`Organization`, `Membership`, `Invitation`, enums `OrganizationStatus`/`MembershipRole`/`MembershipStatus`) | Add domain models below the `── Product Models ──` marker. Every tenant-owned model MUST carry an indexed `organizationId` FK — see the tenancy contract comment above the `Organization` model |
+| `backend/prisma/schema.prisma` | 🔌 | `User`, `RefreshToken`, `AuditLog` (now carries an optional `organizationId`, SET NULL on org delete) base models + multi-tenancy (`Organization` — now with `logoUrl`/`primaryColor`/`settings` Json —, `Membership`, `Invitation`, enums `OrganizationStatus`/`MembershipRole`/`MembershipStatus`) | Add domain models below the `── Product Models ──` marker. Every tenant-owned model MUST carry an indexed `organizationId` FK — see the tenancy contract comment above the `Organization` model. A field goes in a real column when structural/queryable, in `settings` when ad-hoc product config |
 | `backend/prisma/migrations/20260911120000_add_organizations_and_memberships/` | ✅ | Creates the three tenancy tables + a **partial** unique index `Invitation_org_email_pending_key` (raw SQL — Prisma cannot express `WHERE`), enforcing one pending invitation per (org, email) | Re-add the partial index by hand if `prisma migrate dev` ever emits a DROP for it |
+| `backend/prisma/migrations/20260911130000_add_org_settings_branding_and_audit_scope/` | ✅ | Adds `Organization.logoUrl`/`primaryColor`/`settings`, and `AuditLog.organizationId` (nullable FK, `ON DELETE SET NULL`) + index. Hand-written SQL, same pattern as the prior tenancy migration | No changes needed |
 | `backend/globals/response.json` | 🔌 | 14 response codes (1000–1014, 1009 retired) | Add product-specific codes if the base set doesn't cover your cases |
 
 ### Helpers
@@ -88,8 +89,8 @@ Every file in this repo, what it does, and what you need to customize per produc
 
 | File | Status | What it does | What to customize |
 |------|--------|--------------|------------------|
-| `backend/modules/organizations/routes/organizationRoutes.js` | ✅ | `POST /orgs`, `GET /orgs`, `POST /orgs/invitations/:token/accept` (user-scoped) + `POST /orgs/:orgId/invitations`, `GET /orgs/:orgId/members`, `PATCH /orgs/:orgId/members/:membershipId`, `DELETE /orgs/:orgId` (org-scoped: `tenantContext` → `requireOrgRole`). Zod-validated | Add org-scoped product routes following the same `tenantContext` + `requireOrgRole` chain |
-| `backend/modules/organizations/services/OrganizationService.js` | ✅ | Org creation (creator becomes `owner`), membership listing, opaque invitation tokens (`randomBytes(48)`, stored sha256-hashed like `RefreshToken`), single-use atomic acceptance (conditional `updateMany` claim inside a transaction — the refresh-rotation pattern), soft member removal, cascade org delete | Extend `publicOrg` / `publicMember` for product fields |
+| `backend/modules/organizations/routes/organizationRoutes.js` | ✅ | `POST /orgs`, `GET /orgs`, `POST /orgs/invitations/:token/accept` (user-scoped) + `POST /orgs/:orgId/invitations`, `GET /orgs/:orgId/members`, `PATCH /orgs/:orgId/members/:membershipId`, `PATCH /orgs/:orgId` (settings/branding, owner/admin), `GET /orgs/:orgId/usage` (any active member), `GET /orgs/:orgId/audit-log` (owner/admin, paginated via `helpers/paginate.js`), `DELETE /orgs/:orgId` (org-scoped: `tenantContext` → `requireOrgRole`). Zod-validated | Add org-scoped product routes following the same `tenantContext` + `requireOrgRole` chain |
+| `backend/modules/organizations/services/OrganizationService.js` | ✅ | Org creation (creator becomes `owner`), membership listing, opaque invitation tokens (`randomBytes(48)`, stored sha256-hashed like `RefreshToken`), single-use atomic acceptance (conditional `updateMany` claim inside a transaction — the refresh-rotation pattern), soft member removal, cascade org delete, `updateOrganization` (name/logoUrl/primaryColor/settings), `getUsageSummary` (extensible `USAGE_PRODUCERS` array — see the comment above it for how a future module registers its own count), `getAuditLog` (paginated, `scopedWhere`-filtered). All org-scoped `auditLogger(...)` calls now pass `organizationId` | Extend `publicOrg` / `publicMember` for product fields. Push a `{ key, count }` producer onto `USAGE_PRODUCERS` for each new tenant-owned model |
 
 **Tenancy convention:** the active organization is the `:orgId` route param for routes nested under `/orgs/:orgId`, and the `X-Organization-Id` header for tenant-scoped routes that are not nested (future files/notifications). Both may be sent but must agree. There is **no server-side "current organization"** — it is resolved per request so one user can drive different orgs in different browser tabs.
 
@@ -152,8 +153,9 @@ Every file in this repo, what it does, and what you need to customize per produc
 | File | Status | What it does | What to customize |
 |------|--------|--------------|------------------|
 | `frontend/src/contexts/AuthContext.jsx` | 🔌 | Global auth state, `login()`, `logout()`, `useAuth()` hook | Add role context switching or product-specific user fields if needed |
-| `frontend/src/contexts/OrganizationContext.jsx` | ✅ | The user's organizations + the one THIS TAB is in (`sessionStorage`, never `localStorage` — different tabs must be able to hold different orgs). `useOrganization()`, `selectOrganization()`, `createOrganization()`, `refresh()`, `hasOrgRole()`. Mounted inside `AuthProvider` in `App.jsx` | Extend with org settings once org-scoped product pages exist |
-| `frontend/src/components/common/OrganizationSwitcher.jsx` | ✅ | Minimal org dropdown + inline "create organization" form; rendered in `DashboardPage` | Move into `MainLayout` / `MobileLayout` headers for your product |
+| `frontend/src/contexts/OrganizationContext.jsx` | ✅ | The user's organizations + the one THIS TAB is in (`sessionStorage`, never `localStorage` — different tabs must be able to hold different orgs). `useOrganization()`, `selectOrganization()`, `createOrganization()`, `refresh()`, `hasOrgRole()`. Mounted inside `AuthProvider` in `App.jsx` | Extend further as more org-scoped product pages exist |
+| `frontend/src/components/common/OrganizationSwitcher.jsx` | ✅ | Org dropdown + inline "create organization" form + a "Manage" link to `/organization/settings`; rendered in `DashboardPage` | Move into `MainLayout` / `MobileLayout` headers for your product |
+| `frontend/src/pages/organization/OrganizationSettingsPage.jsx` | ✅ | Org settings/branding form (name/logoUrl/primaryColor), members list with role-change/remove (owner/admin only — the backend also enforces this), a usage summary (`StatCard` per producer), and a paginated audit log. Routed at `/organization/settings` in `App.jsx` | Extend as more org-admin surface is needed |
 
 ### Components
 
@@ -168,7 +170,7 @@ Every file in this repo, what it does, and what you need to customize per produc
 
 | File | Status | What it does | What to customize |
 |------|--------|--------------|------------------|
-| `frontend/src/server/api.js` | 🔌 | Single API gateway, auth headers, refresh-once recovery (HTTP 401 + envelope 1010), response unwrapping, `X-Organization-Id` injection (derived from the `:orgId` path param when present, else this tab's active org), `api.orgs.*` namespace | Add product domain namespaces to the `api` object |
+| `frontend/src/server/api.js` | 🔌 | Single API gateway, auth headers, refresh-once recovery (HTTP 401 + envelope 1010), response unwrapping, `X-Organization-Id` injection (derived from the `:orgId` path param when present, else this tab's active org), `api.orgs.*` namespace (now also `update`/`usage`/`auditLog`) | Add product domain namespaces to the `api` object |
 | `frontend/src/server/ws.js` | ✅ | Single WS client (`wsClient`) over the shared hub: auto-connect, backoff reconnect, channel subscribe/unsubscribe, typed events | No changes needed; add product channels via `subscribeChannel` |
 | `frontend/src/hooks/useWebSocket.js` | ✅ | Realtime React hook: `useWebSocket(channel, handler, { enabled })` | No changes needed |
 | `frontend/src/hooks/useDataFetch.js` | ✅ | Generic data-fetch hook with loading/error state | No changes needed |

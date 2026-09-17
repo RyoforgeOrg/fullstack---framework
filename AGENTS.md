@@ -82,8 +82,8 @@ A **SaaS scaffold** built on a proven stack. Use it to bootstrap new SaaS produc
 │   │   │   ├── routes/authRoutes.js    # login, refresh, me, logout, profile, pwd reset
 │   │   │   └── services/AuthService.js # full auth logic
 │   │   └── organizations/
-│   │       ├── routes/organizationRoutes.js      # /orgs CRUD, members, invitations
-│   │       └── services/OrganizationService.js   # org + membership + invitation logic
+│   │       ├── routes/organizationRoutes.js      # /orgs CRUD, members, invitations, settings, usage, audit-log
+│   │       └── services/OrganizationService.js   # org + membership + invitation + usage/audit-log logic
 │   │
 │   ├── routes/
 │   │   └── index.js         # Central router — add module mounts here
@@ -128,7 +128,9 @@ A **SaaS scaffold** built on a proven stack. Use it to bootstrap new SaaS produc
         ├── utils/
         │   └── subdomain.js     # Subdomain detection (multi-tenant)
         └── pages/
-            └── _stub.jsx        # Page template
+            ├── _stub.jsx        # Page template
+            └── organization/
+                └── OrganizationSettingsPage.jsx  # Settings/branding form, members, usage, audit log
 ```
 
 ---

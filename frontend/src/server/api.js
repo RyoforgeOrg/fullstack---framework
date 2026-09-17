@@ -345,6 +345,10 @@ const api = {
     list:   ()     => request('GET',  '/orgs', {}, {}, null, { orgId: null }),
     create: (body) => request('POST', '/orgs', {}, {}, body, { orgId: null }),
     accept: ({ token }) => request('POST', '/orgs/invitations/:token/accept', { token }, {}, null, { orgId: null }),
+    // name/logoUrl/primaryColor/settings — any subset.
+    update: ({ orgId, ...b }) => request('PATCH', '/orgs/:orgId', { orgId }, {}, b),
+    usage:  ({ orgId })       => request('GET',   '/orgs/:orgId/usage', { orgId }),
+    auditLog: ({ orgId, ...query }) => request('GET', '/orgs/:orgId/audit-log', { orgId }, query),
     members: {
       list:   ({ orgId })       => request('GET',   '/orgs/:orgId/members', { orgId }),
       invite: ({ orgId, ...b }) => request('POST',  '/orgs/:orgId/invitations', { orgId }, {}, b),
