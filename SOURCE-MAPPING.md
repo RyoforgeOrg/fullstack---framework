@@ -47,7 +47,7 @@ Every file in this repo, what it does, and what you need to customize per produc
 
 | File | Status | What it does | What to customize |
 |------|--------|--------------|------------------|
-| `backend/prisma/schema.prisma` | 🔌 | `User`, `RefreshToken`, `AuditLog` base models | Add domain models below the `── Product Models ──` marker |
+| `backend/prisma/schema.prisma` | 🔌 | `User`, `RefreshToken`, `AuditLog`, `Notification` base models | Add domain models below the `── Product Models ──` marker |
 | `backend/globals/response.json` | 🔌 | 14 response codes (1000–1014, 1009 retired) | Add product-specific codes if the base set doesn't cover your cases |
 
 ### Helpers
@@ -81,6 +81,15 @@ Every file in this repo, what it does, and what you need to customize per produc
 | `backend/modules/auth/services/AuthService.js` | ✅ | Full auth logic: lockout (5 strikes → 15-min `lockedUntil`), opaque refresh-token rotation (lookup by `tokenHash` + `revoked`/`expiredAt`; expiry lives in the DB row), /me, profile, forgot/reset-password via Redis OTP | Extend `buildUserPayload()` for product-specific user fields |
 
 **Auth flow — done:** `forgotPassword` generates a 6-digit OTP, stores its hash in Redis (`auth:reset:otp:<email>`, 10-min TTL), emails via `emailService` (send failure logged, never surfaced). `resetPassword` caps attempts per email (5), validates hash, updates password, bumps `tokenVersion`, revokes ALL refresh tokens (kills pre-reset sessions end-to-end).
+
+### Notifications Module
+
+| File | Status | What it does | What to customize |
+|------|--------|--------------|------------------|
+| `backend/modules/notifications/notificationCategories.js` | 🔌 | `type` → category grouping (`security`/`organization`/`product`) used for email opt-out; `security` is never opt-out-able | Add new `type`s to `TYPE_CATEGORY_MAP` as modules introduce them |
+| `backend/modules/notifications/services/NotificationService.js` | ✅ | `notify({ userId, organizationId?, type, title, body, data?, channels? })` — writes the `Notification` row, pushes it live on WS channel `user:<userId>`, enqueues `queue:notification-email` when requested + not opted out. Also `listNotifications`, `markRead`, `markAllRead`, `getPreferences`, `updatePreferences` | Call `notify()` from any module to raise a notification (see doc comment for intended `OrganizationService`/`AuthService` call sites once those modules land in this worktree) |
+| `backend/modules/notifications/routes/notificationRoutes.js` | ✅ | `GET /`, `PATCH /:id/read`, `POST /read-all`, `GET /preferences`, `PATCH /preferences` — user-scoped, `verifyToken` only | No changes needed |
+| `backend/workers/notificationEmailJobHandler.js` | ✅ | Worker handler for `queue:notification-email` — sends via `emailService`, updates `Notification.emailDeliveredAt`/`emailDeliveryError` | Registered in `worker.js` |
 
 ### Routes & Scripts
 
@@ -142,6 +151,7 @@ Every file in this repo, what it does, and what you need to customize per produc
 | `frontend/src/components/MainLayout.jsx` | 🔌 | Desktop sidebar shell | Define `NAV_ITEMS` array with your product's navigation |
 | `frontend/src/components/MobileLayout.jsx` | 🔌 | Mobile bottom-nav shell | Define `MOBILE_NAV_ITEMS` array |
 | `frontend/src/components/common/` | ✅ | 17 reusable UI primitives: Button, Input, Modal, Table, Card, Badge, Toast, Select, StatCard, SearchableSelect, PhoneInput, Calendar, Loading, ProfileModal, WelcomeBanner, Icon3D, useToast | No changes needed; extend individual components per product if needed |
+| `frontend/src/components/common/NotificationBell.jsx` | ✅ | Bell + dropdown inbox; loads via `api.notifications.list`, live-pushed via `useWebSocket('user:<id>', ...)`, mark-read/mark-all-read | No changes needed; wired into `MainLayout.jsx`/`MobileLayout.jsx` headers |
 
 ### Data & API
 

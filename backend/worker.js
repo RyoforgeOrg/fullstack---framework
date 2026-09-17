@@ -9,9 +9,11 @@ const { startWorker } = require('./helpers/queue/jobQueue');
 
 // ── Register your product's job handlers here ──────────────────────────────────
 // const { handleMyFeature } = require('./workers/myFeatureJobHandler');
+const { handleNotificationEmail } = require('./workers/notificationEmailJobHandler');
 
 const handlers = {
   // 'my-feature:action': handleMyFeature,
+  'queue:notification-email': handleNotificationEmail,
 };
 
 startWorker(handlers, { exitOnError: false });

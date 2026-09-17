@@ -67,9 +67,13 @@ A **production-grade SaaS scaffold** built on a proven stack. Use it to bootstra
 │   │   └── upload.js        # multer memoryStorage 5 MB
 │   │
 │   ├── modules/
-│   │   └── auth/
-│   │       ├── routes/authRoutes.js    # login, refresh, me, logout, profile, pwd reset
-│   │       └── services/AuthService.js # full auth logic
+│   │   ├── auth/
+│   │   │   ├── routes/authRoutes.js    # login, refresh, me, logout, profile, pwd reset
+│   │   │   └── services/AuthService.js # full auth logic
+│   │   └── notifications/
+│   │       ├── notificationCategories.js  # type → category (security/organization/product)
+│   │       ├── routes/notificationRoutes.js
+│   │       └── services/NotificationService.js  # notify(), list/markRead/preferences
 │   │
 │   ├── routes/
 │   │   └── index.js         # Central router — add module mounts here
@@ -85,7 +89,8 @@ A **production-grade SaaS scaffold** built on a proven stack. Use it to bootstra
 │   ├── jobs/
 │   │   └── _stub.js         # Cron job template
 │   └── workers/
-│       └── _stub.js         # Background job handler template
+│       ├── _stub.js         # Background job handler template
+│       └── notificationEmailJobHandler.js  # queue:notification-email — sends via emailService
 │
 └── frontend/
     ├── server.js            # Express SPA server with OG meta injection
@@ -107,11 +112,13 @@ A **production-grade SaaS scaffold** built on a proven stack. Use it to bootstra
         │   ├── PrivateRoute.jsx
         │   ├── MainLayout.jsx   # Desktop sidebar — define NAV_ITEMS
         │   ├── MobileLayout.jsx # Mobile bottom nav — define MOBILE_NAV_ITEMS
-        │   └── common/          # 17 reusable UI primitives
+        │   └── common/          # 17 reusable UI primitives + NotificationBell.jsx
         ├── hooks/
-        │   └── useDataFetch.js  # Generic data fetch hook
+        │   ├── useDataFetch.js  # Generic data fetch hook
+        │   └── useWebSocket.js  # channel subscribe hook over server/ws.js
         ├── server/
-        │   └── api.js           # Single API gateway — all fetch() calls live here
+        │   ├── api.js            # Single API gateway — all fetch() calls live here
+        │   └── ws.js              # Shared WS client (wsClient) over the hub
         ├── utils/
         │   └── subdomain.js     # Subdomain detection (multi-tenant)
         └── pages/

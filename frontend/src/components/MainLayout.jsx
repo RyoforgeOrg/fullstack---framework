@@ -5,6 +5,7 @@
 import { useState } from 'react'
 import { Outlet, useNavigate, NavLink } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import NotificationBell from './common/NotificationBell'
 
 // Define your product's navigation items here.
 // Shape: [{ label: string, path: string, icon: ReactNode, roles: string[] }]
@@ -70,8 +71,13 @@ export const MainLayout = () => {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto">
-        <Outlet />
+      <main className="flex-1 overflow-y-auto flex flex-col">
+        <header className="flex items-center justify-end px-4 py-2 border-b border-white/10">
+          <NotificationBell />
+        </header>
+        <div className="flex-1">
+          <Outlet />
+        </div>
       </main>
     </div>
   )

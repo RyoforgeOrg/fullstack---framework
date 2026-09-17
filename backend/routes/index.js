@@ -15,6 +15,10 @@ const verifyToken = require('../middleware/verifyToken');
 const authRoutes = require('../modules/auth/routes/authRoutes');
 router.use('/common/auth', authRoutes);
 
+// ── Notifications (user-scoped — verifyToken only, no tenantContext) ──────────
+const notificationRoutes = require('../modules/notifications/routes/notificationRoutes');
+router.use('/common/notifications', verifyToken, notificationRoutes);
+
 // ── Add your product's modules below ──────────────────────────────────────────
 // const exampleRoutes = require('../modules/example/routes/exampleRoutes');
 // router.use('/admin/example', verifyToken, role('admin'), exampleRoutes);
