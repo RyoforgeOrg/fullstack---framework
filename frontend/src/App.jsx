@@ -27,6 +27,7 @@ const LoginPage          = lazy(() => import('./pages/auth/LoginPage'))
 const ForgotPasswordPage = lazy(() => import('./pages/auth/ForgotPasswordPage'))
 const ResetPasswordPage  = lazy(() => import('./pages/auth/ResetPasswordPage'))
 const DashboardPage      = lazy(() => import('./pages/dashboard/DashboardPage'))
+const OrganizationSettingsPage = lazy(() => import('./pages/organization/OrganizationSettingsPage'))
 const DesignGallery      = lazy(() => import('./components/designs/Gallery'))
 
 // ── Role-default route helper (implement per product) ─────────────────────────
@@ -76,6 +77,7 @@ function AppRoutes() {
       >
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/admin/dashboard" element={<DashboardPage />} />
+        <Route path="/organization/settings" element={<OrganizationSettingsPage />} />
       </Route>
       <Route
         element={

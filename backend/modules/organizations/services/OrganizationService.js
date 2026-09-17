@@ -17,17 +17,21 @@ const apiResponse = require('../../../helpers/apiResponse');
 const { auditLogger }     = require('../../../helpers/auditLogger');
 const { scopedWhere }     = require('../../../helpers/tenantScope');
 const { sendOrgInvitation } = require('../../../helpers/emailService');
+const paginate     = require('../../../helpers/paginate');
 
 const INVITE_TTL_DAYS = 7;
 
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
 const publicOrg = (org) => ({
-  id:        org.id,
-  name:      org.name,
-  slug:      org.slug,
-  status:    org.status,
-  createdAt: org.createdAt,
+  id:           org.id,
+  name:         org.name,
+  slug:         org.slug,
+  status:       org.status,
+  logoUrl:      org.logoUrl,
+  primaryColor: org.primaryColor,
+  settings:     org.settings,
+  createdAt:    org.createdAt,
 });
 
 const publicMember = (m) => ({
@@ -85,7 +89,7 @@ async function createOrganization(req, res) {
     throw error;
   }
 
-  await auditLogger('ORG_CREATED', req.user, req);
+  await auditLogger('ORG_CREATED', req.user, req, { organizationId: organization.id });
   return apiResponse.send(res, 'CREATED', { organization: publicOrg(organization) });
 }
 
@@ -158,7 +162,7 @@ async function inviteMember(req, res) {
     console.error('[OrganizationService.inviteMember] invitation email failed:', sendErr.message);
   }
 
-  await auditLogger('ORG_MEMBER_INVITED', req.user, req);
+  await auditLogger('ORG_MEMBER_INVITED', req.user, req, { organizationId: req.organizationId });
   return apiResponse.send(res, 'CREATED', {
     invitation: {
       id:        invitation.id,
@@ -223,7 +227,7 @@ async function acceptInvitation(req, res) {
 
   if (!membership) return apiResponse.send(res, 'INVALID_REQUEST', INVALID);
 
-  await auditLogger('ORG_INVITATION_ACCEPTED', req.user, req);
+  await auditLogger('ORG_INVITATION_ACCEPTED', req.user, req, { organizationId: invitation.organizationId });
   return apiResponse.send(res, 'SUCCESS', {
     organization: publicOrg(invitation.organization),
     membership:   publicMember(membership),
@@ -275,7 +279,8 @@ async function updateMember(req, res) {
     include: { user: { select: { id: true, name: true, email: true, userName: true } } },
   });
 
-  await auditLogger(status === 'removed' ? 'ORG_MEMBER_REMOVED' : 'ORG_MEMBER_ROLE_CHANGED', req.user, req);
+  await auditLogger(status === 'removed' ? 'ORG_MEMBER_REMOVED' : 'ORG_MEMBER_ROLE_CHANGED', req.user, req,
+    { organizationId: req.organizationId });
   return apiResponse.send(res, 'SUCCESS', { member: publicMember(updated) });
 }
 
@@ -285,9 +290,92 @@ async function updateMember(req, res) {
 // membership rows would defeat the unique(userId, organizationId) reactivation
 // path. The AuditLog row is the surviving record of the deletion.
 async function deleteOrganization(req, res) {
-  await prisma.organization.delete({ where: { id: req.organizationId } });
-  await auditLogger('ORG_DELETED', req.user, req);
+  const organizationId = req.organizationId;
+  // Audit BEFORE delete, not after: AuditLog.organizationId is a real FK, so a
+  // row written once the organization is gone would have nothing to point at
+  // and fail to insert (auditLogger swallows that, silently losing the very
+  // row meant to record the deletion). Logging first means the FK still
+  // resolves; the existing SET NULL behavior takes over for this row (and
+  // every earlier one on this org) the moment the delete below commits.
+  await auditLogger('ORG_DELETED', req.user, req, { organizationId });
+  await prisma.organization.delete({ where: { id: organizationId } });
   return apiResponse.send(res, 'SUCCESS', { message: 'Organization deleted.' });
+}
+
+// ── PATCH /orgs/:orgId — update name/settings/branding (owner/admin) ──────────
+async function updateOrganization(req, res) {
+  const { name, settings, logoUrl, primaryColor } = req.body;
+
+  const updated = await prisma.organization.update({
+    where: { id: req.organizationId },
+    data: {
+      ...(name !== undefined ? { name } : {}),
+      ...(settings !== undefined ? { settings } : {}),
+      ...(logoUrl !== undefined ? { logoUrl } : {}),
+      ...(primaryColor !== undefined ? { primaryColor } : {}),
+    },
+  });
+
+  await auditLogger('ORG_UPDATED', req.user, req, { organizationId: req.organizationId });
+  return apiResponse.send(res, 'SUCCESS', { organization: publicOrg(updated) });
+}
+
+// ── GET /orgs/:orgId/usage — any active member ─────────────────────────────────
+// Extensible registry: each producer returns { key, count } for one tenant-owned
+// resource, scoped via scopedWhere so it can never leak across tenants. No other
+// tenant-owned models exist in this codebase yet (files/billing/notifications are
+// being built in parallel), so this starts with just members + invitations.
+//
+// HOW A FUTURE MODULE REGISTERS ITS OWN COUNT (e.g. backend/modules/files):
+//   USAGE_PRODUCERS.push({
+//     key: 'files',
+//     count: (req) => require('../../files/services/FileService')
+//       .prisma.file.count({ where: scopedWhere(req) }),
+//   });
+// — or, to avoid a require cycle, just add a line to this array once the model
+// exists. Nothing else in this file needs to change.
+const USAGE_PRODUCERS = [
+  {
+    key:   'members',
+    count: (req) => prisma.membership.count({ where: scopedWhere(req, { status: 'active' }) }),
+  },
+  {
+    key:   'pendingInvitations',
+    count: (req) => prisma.invitation.count({
+      where: scopedWhere(req, { acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } }),
+    }),
+  },
+];
+
+async function getUsageSummary(req, res) {
+  const usage = await Promise.all(
+    USAGE_PRODUCERS.map(async ({ key, count }) => ({ key, count: await count(req) }))
+  );
+  return apiResponse.send(res, 'SUCCESS', { usage });
+}
+
+// ── GET /orgs/:orgId/audit-log — owner/admin, paginated ────────────────────────
+async function getAuditLog(req, res) {
+  const { skip, take, meta } = paginate(req.query);
+  const where = scopedWhere(req);
+
+  const [entries, total] = await Promise.all([
+    prisma.auditLog.findMany({ where, orderBy: { createdAt: 'desc' }, skip, take }),
+    prisma.auditLog.count({ where }),
+  ]);
+
+  return apiResponse.send(res, 'SUCCESS', {
+    entries: entries.map((e) => ({
+      id:        e.id,
+      action:    e.action,
+      userId:    e.userId,
+      userName:  e.userName,
+      userRole:  e.userRole,
+      ipAddress: e.ipAddress,
+      createdAt: e.createdAt,
+    })),
+    pagination: meta(total),
+  });
 }
 
 module.exports = {
@@ -297,5 +385,8 @@ module.exports = {
   acceptInvitation,
   listMembers,
   updateMember,
+  updateOrganization,
+  getUsageSummary,
+  getAuditLog,
   deleteOrganization,
 };

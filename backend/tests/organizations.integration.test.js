@@ -454,6 +454,127 @@ test('org routes require authentication', { skip }, async () => {
   assert.strictEqual((await request.post('/api/v1/orgs').send({ name: 'Nope' })).status, 401);
 });
 
+// ── Settings / branding (PATCH /orgs/:orgId) ──────────────────────────────────
+
+test('settings: owner/admin can update name/branding/settings; member/viewer cannot', { skip }, async () => {
+  const owner  = await makeUser('sowner2');
+  const admin  = await makeUser('sadmin2');
+  const member = await makeUser('smember2');
+  const viewer = await makeUser('sviewer2');
+  const org    = await createOrg(owner, 'Settings Inc');
+
+  await inviteAndAccept(owner, org, admin, 'admin');
+  await inviteAndAccept(owner, org, member, 'member');
+  await inviteAndAccept(owner, org, viewer, 'viewer');
+
+  for (const actor of [member, viewer]) {
+    const denied = await request.patch(`/api/v1/orgs/${org.id}`)
+      .set(auth(actor)).send({ name: 'Nope' });
+    assert.strictEqual(denied.status, 403);
+  }
+
+  const asOwner = await request.patch(`/api/v1/orgs/${org.id}`)
+    .set(auth(owner)).send({
+      name:         'Settings Inc Renamed',
+      logoUrl:      'https://cdn.example.com/logo.png',
+      primaryColor: '#1A2B3C',
+      settings:     { feature: { betaBanner: true } },
+    });
+  assert.strictEqual(asOwner.status, 200, JSON.stringify(asOwner.body));
+  const updated = result(asOwner).organization;
+  assert.strictEqual(updated.name, 'Settings Inc Renamed');
+  assert.strictEqual(updated.logoUrl, 'https://cdn.example.com/logo.png');
+  assert.strictEqual(updated.primaryColor, '#1A2B3C');
+  assert.deepStrictEqual(updated.settings, { feature: { betaBanner: true } });
+
+  const asAdmin = await request.patch(`/api/v1/orgs/${org.id}`)
+    .set(auth(admin)).send({ primaryColor: '#FF00AA' });
+  assert.strictEqual(asAdmin.status, 200);
+  assert.strictEqual(result(asAdmin).organization.primaryColor, '#FF00AA');
+  // Fields not sent are left untouched.
+  assert.strictEqual(result(asAdmin).organization.name, 'Settings Inc Renamed');
+
+  const badColor = await request.patch(`/api/v1/orgs/${org.id}`)
+    .set(auth(owner)).send({ primaryColor: 'not-a-hex-color' });
+  assert.strictEqual(badColor.status, 400);
+});
+
+// ── Usage summary (GET /orgs/:orgId/usage) ─────────────────────────────────────
+
+test('usage: counts are accurate and tenant-scoped, any active member can view', { skip }, async () => {
+  const owner  = await makeUser('uowner');
+  const member = await makeUser('umember');
+  const pendee = await makeUser('upendee');
+  const org1   = await createOrg(owner, 'Usage One');
+  const org2   = await createOrg(owner, 'Usage Two');
+
+  await inviteAndAccept(owner, org1, member, 'member');
+  // A pending (not yet accepted) invitation for org1.
+  const pend = await request.post(`/api/v1/orgs/${org1.id}/invitations`)
+    .set(auth(owner)).send({ email: pendee.email, role: 'member' });
+  assert.strictEqual(pend.status, 201);
+
+  const usage1 = await request.get(`/api/v1/orgs/${org1.id}/usage`).set(auth(member));
+  assert.strictEqual(usage1.status, 200);
+  const byKey1 = Object.fromEntries(result(usage1).usage.map(u => [u.key, u.count]));
+  assert.strictEqual(byKey1.members, 2, 'owner + member');
+  assert.strictEqual(byKey1.pendingInvitations, 1);
+
+  // org2 has no extra members/invitations — proves the counts are scoped, not global.
+  const usage2 = await request.get(`/api/v1/orgs/${org2.id}/usage`).set(auth(owner));
+  const byKey2 = Object.fromEntries(result(usage2).usage.map(u => [u.key, u.count]));
+  assert.strictEqual(byKey2.members, 1);
+  assert.strictEqual(byKey2.pendingInvitations, 0);
+
+  // A non-member is still rejected (org:access requires active membership).
+  const outsider = await makeUser('uoutsider');
+  const denied = await request.get(`/api/v1/orgs/${org1.id}/usage`).set(auth(outsider));
+  assert.strictEqual(denied.status, 403);
+});
+
+// ── Audit log (GET /orgs/:orgId/audit-log) ─────────────────────────────────────
+
+test('audit log: owner/admin only, tenant-scoped, paginated, and org actions are recorded', { skip }, async () => {
+  const owner  = await makeUser('lowner');
+  const admin  = await makeUser('ladmin');
+  const member = await makeUser('lmember');
+  const org1   = await createOrg(owner, 'Audit One');
+  const org2   = await createOrg(owner, 'Audit Two');
+
+  await inviteAndAccept(owner, org1, admin, 'admin');
+  await inviteAndAccept(owner, org1, member, 'member');
+  await request.patch(`/api/v1/orgs/${org1.id}`).set(auth(owner)).send({ name: 'Audit One Renamed' });
+
+  // member/viewer cannot view the audit log.
+  const denied = await request.get(`/api/v1/orgs/${org1.id}/audit-log`).set(auth(member));
+  assert.strictEqual(denied.status, 403);
+
+  const log = await request.get(`/api/v1/orgs/${org1.id}/audit-log`).set(auth(owner)).query({ limit: 2 });
+  assert.strictEqual(log.status, 200, JSON.stringify(log.body));
+  const page = result(log);
+  assert.strictEqual(page.entries.length, 2, 'pagination limit is respected');
+  assert.strictEqual(page.pagination.limit, 2);
+  assert.ok(page.pagination.total >= 4, 'created + 2 invites-accepted + org update');
+  assert.ok(page.pagination.hasNext);
+
+  const actions = page.entries.map(e => e.action);
+  assert.ok(actions.every(a => typeof a === 'string'));
+
+  // Tenant-scoped: org2's log must not contain org1's events, and vice versa.
+  const allOrg1 = result(await request.get(`/api/v1/orgs/${org1.id}/audit-log`)
+    .set(auth(owner)).query({ limit: 100 })).entries;
+  assert.ok(allOrg1.some(e => e.action === 'ORG_UPDATED'));
+  assert.ok(allOrg1.some(e => e.action === 'ORG_MEMBER_INVITED'));
+
+  const org2Log = result(await request.get(`/api/v1/orgs/${org2.id}/audit-log`)
+    .set(auth(owner)).query({ limit: 100 })).entries;
+  assert.ok(org2Log.every(e => e.action !== 'ORG_UPDATED'), 'org1 events must not leak into org2 log');
+  assert.ok(org2Log.some(e => e.action === 'ORG_CREATED'), 'org2 has its own creation event');
+
+  // admin can view too.
+  assert.strictEqual((await request.get(`/api/v1/orgs/${org1.id}/audit-log`).set(auth(admin))).status, 200);
+});
+
 test('validation: bad slug / short name / unknown role → 400, duplicate slug → 409', { skip }, async () => {
   const u = await makeUser('vowner');
 

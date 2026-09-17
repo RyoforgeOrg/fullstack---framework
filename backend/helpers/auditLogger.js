@@ -13,7 +13,7 @@ const prisma = require('../config/dbConnect');
 
 // Keep in sync with prisma/schema.prisma's AuditLog model. id/createdAt are
 // set by Prisma itself and must not be overridable via `extra`.
-const ALLOWED_EXTRA_FIELDS = new Set(['action', 'userId', 'userName', 'userRole', 'ipAddress', 'userAgent']);
+const ALLOWED_EXTRA_FIELDS = new Set(['action', 'userId', 'userName', 'userRole', 'ipAddress', 'userAgent', 'organizationId']);
 
 async function auditLogger(action, user, req, extra = {}) {
   const filteredExtra = {};

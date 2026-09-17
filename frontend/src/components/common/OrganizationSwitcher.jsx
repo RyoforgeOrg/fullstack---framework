@@ -7,6 +7,7 @@
  * user can keep a second tab open on a different organization.
  */
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useOrganization } from '../../contexts/OrganizationContext'
 import { Select } from './Select'
 import Button from './Button'
@@ -78,6 +79,11 @@ export function OrganizationSwitcher() {
       <Button size="sm" variant="secondary" onClick={() => setCreating(true)}>
         {organizations.length ? 'New' : 'Create organization'}
       </Button>
+      {activeOrgId && (
+        <Link to="/organization/settings" className="text-sm text-white/50 hover:text-white whitespace-nowrap">
+          Manage
+        </Link>
+      )}
     </div>
   )
 }

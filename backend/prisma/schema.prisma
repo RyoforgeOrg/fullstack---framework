@@ -65,20 +65,27 @@ model RefreshToken {
 }
 
 model AuditLog {
-  id        String   @id @default(cuid())
-  action    String
-  userId    String?
-  userName  String?
-  userRole  String?
-  ipAddress String?
-  userAgent String?
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  action         String
+  userId         String?
+  userName       String?
+  userRole       String?
+  ipAddress      String?
+  userAgent      String?
+  // Nullable: plenty of audit events (login/logout, password reset) are not
+  // org-scoped. SET NULL on org delete — the AuditLog row is deliberately the
+  // surviving record of an organization's deletion (see OrganizationService's
+  // deleteOrganization comment), so it must outlive the FK target.
+  organizationId String?
+  createdAt      DateTime @default(now())
 
-  user      User?    @relation(fields: [userId], references: [id])
+  user         User?         @relation(fields: [userId], references: [id])
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([action])
   @@index([createdAt])
+  @@index([organizationId])
 }
 
 // ── Multi-tenancy (Organization / Membership / Invitation) ────────────────────
@@ -119,6 +126,19 @@ model Organization {
   name      String
   slug      String             @unique
   status    OrganizationStatus @default(active)
+  // Branding — real columns, not `settings`, because these are likely to be
+  // queried/indexed-on-existence later (e.g. "orgs with a logo set"). Actual
+  // file upload is out of scope here (A07/file-service); a client uploads to
+  // that service (or an external image host) and passes back the URL.
+  // INTEGRATION POINT for A07: once a file-service exists, logoUrl can be
+  // populated from its upload response — no schema change needed here.
+  logoUrl      String?
+  primaryColor String?
+  // Ad-hoc, product-specific config (branding extras, feature toggles, ...)
+  // that doesn't need its own migration. CONVENTION: a field goes in a real
+  // column when it's structural or queried/filtered on; it goes in `settings`
+  // when it's extensible, product-specific config nobody needs to query by.
+  settings  Json?
   createdAt DateTime           @default(now())
   updatedAt DateTime           @updatedAt
 
@@ -126,6 +146,7 @@ model Organization {
   invitations   Invitation[]
   files         File[]
   notifications Notification[]
+  auditLogs     AuditLog[]
 }
 
 model Membership {
