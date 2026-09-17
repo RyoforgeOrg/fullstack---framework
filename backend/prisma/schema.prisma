@@ -40,6 +40,7 @@ model User {
   auditLogs            AuditLog[]
   memberships          Membership[]
   invitationsSent      Invitation[]   @relation("InvitationsSent")
+  filesUploaded        File[]
 }
 
 model RefreshToken {
@@ -117,6 +118,7 @@ model Organization {
 
   memberships Membership[]
   invitations Invitation[]
+  files       File[]
 }
 
 model Membership {
@@ -171,3 +173,40 @@ model Invitation {
 // ── Product Models ────────────────────────────────────────────────────────────
 // Add your domain-specific models here.
 // Use `npm run gen:model ModelName field:Type` to scaffold a new model.
+
+// ── Files (tenant-owned object storage metadata) ───────────────────────────────
+//
+// File rows are metadata only — the actual bytes live in S3 under `storageKey`,
+// namespaced `orgs/<organizationId>/<fileId>/<sanitized-filename>` (defense in
+// depth on top of the DB-level organizationId check; see helpers/fileStorage.js
+// and modules/files/services/FileService.js). `storageKey` is an internal
+// implementation detail — routes must never return it to the client, only
+// short-lived signed download URLs.
+//
+// Soft delete (status='deleted' + deletedAt): audit/billing may need historical
+// usage, so a deleted row survives; the underlying S3 object is removed
+// synchronously by FileService.deleteFile.
+
+enum FileStatus {
+  active
+  deleted
+}
+
+model File {
+  id               String     @id @default(cuid())
+  organizationId   String
+  uploadedByUserId String
+  filename         String
+  storageKey       String
+  mimeType         String
+  sizeBytes        Int
+  status           FileStatus @default(active)
+  createdAt        DateTime   @default(now())
+  deletedAt        DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  uploadedBy   User         @relation(fields: [uploadedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([organizationId, status])
+}

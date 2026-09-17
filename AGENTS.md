@@ -62,6 +62,7 @@ A **SaaS scaffold** built on a proven stack. Use it to bootstrap new SaaS produc
 │   │   ├── generateToken.js # JWT access + refresh token helpers
 │   │   ├── emailService.js  # SMTP transport (dev mode logs when SMTP_HOST unset)
 │   │   ├── tenantScope.js   # scopedWhere(req, extra) — MUST wrap every tenant-owned query
+│   │   ├── fileStorage.js   # uploadObject/getSignedDownloadUrl/deleteObject — S3-backed, provider-swappable
 │   │   ├── ws/
 │   │   │   └── hub.js       # Reusable WS emitter/receiver: attachWsHub + emitToChannel
 │   │   └── queue/
@@ -81,9 +82,12 @@ A **SaaS scaffold** built on a proven stack. Use it to bootstrap new SaaS produc
 │   │   ├── auth/
 │   │   │   ├── routes/authRoutes.js    # login, refresh, me, logout, profile, pwd reset
 │   │   │   └── services/AuthService.js # full auth logic
-│   │   └── organizations/
-│   │       ├── routes/organizationRoutes.js      # /orgs CRUD, members, invitations
-│   │       └── services/OrganizationService.js   # org + membership + invitation logic
+│   │   ├── organizations/
+│   │   │   ├── routes/organizationRoutes.js      # /orgs CRUD, members, invitations
+│   │   │   └── services/OrganizationService.js   # org + membership + invitation logic
+│   │   └── files/
+│   │       ├── routes/fileRoutes.js    # /orgs/:orgId/files — upload, list, metadata, download URL, delete
+│   │       └── services/FileService.js # quota-enforced upload, tenant-scoped CRUD, soft delete
 │   │
 │   ├── routes/
 │   │   └── index.js         # Central router — add module mounts here
@@ -317,6 +321,7 @@ wsClient.onChannel('user:' + userId, (payload) => ...);  // auto-connects
 | Org permission matrix | `backend/middleware/requireOrgRole.js` (`ORG_PERMISSIONS`) |
 | Scoping a tenant-owned query | `backend/helpers/tenantScope.js` — `scopedWhere(req, extra)`, mandatory |
 | Organization API | `backend/modules/organizations/` |
+| File API (tenant-owned uploads) | `backend/modules/files/` + `backend/helpers/fileStorage.js` (S3-backed; `storageKey` never exposed to clients) |
 | Organization context (frontend) | `frontend/src/contexts/OrganizationContext.jsx` — active org is per-TAB (`sessionStorage`) |
 | Common UI | `frontend/src/components/common/index.js` |
 | Design templates | `frontend/src/components/designs/` (10 landing-page templates, TSX) |

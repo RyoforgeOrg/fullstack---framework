@@ -40,6 +40,7 @@ Every file in this repo, what it does, and what you need to customize per produc
 | `backend/config/dbConnect.js` | ✅ | PrismaClient via `@prisma/adapter-pg` (pg.Pool) | Driven by `DATABASE_URL` — no code changes |
 | `backend/config/redisConfig.js` | ✅ | Redis client + getCache/setCache/deleteCache helpers | Driven by `REDIS_*` env vars — no code changes |
 | `backend/config/s3.js` | ✅ | AWS S3Client init | Driven by `AWS_*` env vars — no code changes |
+| `backend/helpers/fileStorage.js` | ✅ | Object storage interface — `uploadObject(buffer, key, mimeType)`, `getSignedDownloadUrl(key, expirySeconds)`, `deleteObject(key)`, backed by S3 (`config/s3.js`). Functions exported individually so `node:test`'s `mock.method` can swap them for a fake in-memory store in tests without AWS credentials | The only file that should import `@aws-sdk/*` directly — route/service code goes through this |
 | `backend/config/cloudinary.js` | ✅ | Cloudinary v2 config | Driven by `CLOUDINARY_*` env vars — no code changes |
 | `backend/.env.example` | ⚙️ | All env var slots documented | Remove unused service vars (e.g. Cloudinary if not used) |
 
@@ -47,8 +48,9 @@ Every file in this repo, what it does, and what you need to customize per produc
 
 | File | Status | What it does | What to customize |
 |------|--------|--------------|------------------|
-| `backend/prisma/schema.prisma` | 🔌 | `User`, `RefreshToken`, `AuditLog` base models + multi-tenancy (`Organization`, `Membership`, `Invitation`, enums `OrganizationStatus`/`MembershipRole`/`MembershipStatus`) | Add domain models below the `── Product Models ──` marker. Every tenant-owned model MUST carry an indexed `organizationId` FK — see the tenancy contract comment above the `Organization` model |
+| `backend/prisma/schema.prisma` | 🔌 | `User`, `RefreshToken`, `AuditLog` base models + multi-tenancy (`Organization`, `Membership`, `Invitation`, enums `OrganizationStatus`/`MembershipRole`/`MembershipStatus`) + `File` (tenant-owned upload metadata, enum `FileStatus`) | Add domain models below the `── Product Models ──` marker. Every tenant-owned model MUST carry an indexed `organizationId` FK — see the tenancy contract comment above the `Organization` model |
 | `backend/prisma/migrations/20260911120000_add_organizations_and_memberships/` | ✅ | Creates the three tenancy tables + a **partial** unique index `Invitation_org_email_pending_key` (raw SQL — Prisma cannot express `WHERE`), enforcing one pending invitation per (org, email) | Re-add the partial index by hand if `prisma migrate dev` ever emits a DROP for it |
+| `backend/prisma/migrations/20260911130000_add_files/` | ✅ | Creates the `File` table (hand-written SQL, matching the org migration's pattern) + `FileStatus` enum + `organizationId`/`organizationId+status` indexes + cascade FKs to `Organization` and `User` | No changes needed |
 | `backend/globals/response.json` | 🔌 | 14 response codes (1000–1014, 1009 retired) | Add product-specific codes if the base set doesn't cover your cases |
 
 ### Helpers
@@ -98,6 +100,20 @@ Every file in this repo, what it does, and what you need to customize per produc
 **Org deletion:** hard delete; `Membership` and `Invitation` are `ON DELETE CASCADE`. Member *removal* is soft (`status='removed'`) so history survives and a re-invite reactivates the same row.
 
 **Auth flow — done:** `forgotPassword` generates a 6-digit OTP, stores its hash in Redis (`auth:reset:otp:<email>`, 10-min TTL), emails via `emailService` (send failure logged, never surfaced). `resetPassword` caps attempts per email (5), validates hash, updates password, bumps `tokenVersion`, revokes ALL refresh tokens (kills pre-reset sessions end-to-end).
+
+### Files Module (tenant-owned object storage)
+
+| File | Status | What it does | What to customize |
+|------|--------|--------------|------------------|
+| `backend/modules/files/routes/fileRoutes.js` | ✅ | Mounted at `/api/v1/orgs/:orgId/files` (`mergeParams: true`). `POST /` upload, `GET /` paginated list, `GET /:fileId` metadata, `GET /:fileId/download` short-lived signed URL, `DELETE /:fileId` soft-delete + storage cleanup. All routes: `tenantContext` → `requireOrgRole(...ORG_PERMISSIONS['org:access'])` (any active member incl. viewer — no dedicated `files:*` permission tier was added, see the file's header comment) | Add a `files:*` tier to `ORG_PERMISSIONS` if upload/download should be restricted below "any active member" |
+| `backend/modules/files/services/FileService.js` | ✅ | `uploadFile` (quota check → `fileStorage.uploadObject` → `prisma.file.create`, cleans up the object if the DB insert fails), `listFiles`/`getFile`/`downloadFile` (all `scopedWhere` + `findFirst`, never `findUnique`), `deleteFile` (soft-delete row, then delete the object synchronously — storage-delete failure is logged, not surfaced as a 500). Delete permission: uploader OR owner/admin (target-row guard, mirrors `OrganizationService.updateMember`) | Quota defaults: 500 MB / 1000 files per org, overridable via `FILES_STORAGE_QUOTA_BYTES` / `FILES_STORAGE_QUOTA_FILE_COUNT` env vars. Swap for `Organization.settings.storageQuotaBytes` once that field exists |
+| `backend/helpers/fileStorage.js` | ✅ | See Config/Infrastructure row above | |
+
+**Storage key namespacing:** `orgs/<organizationId>/<fileId>/<sanitized-filename>` — defense in depth on top of the DB-level `organizationId` filter. `storageKey` is never returned to clients; only `publicFile()`'s allowlisted fields (`id`, `filename`, `mimeType`, `sizeBytes`, `status`, `uploadedByUserId`, `createdAt`, `deletedAt`) are.
+
+**Upload allowlist:** images (jpeg/png/webp/gif), PDF, legacy + OOXML office docs (doc/docx/xls/xlsx), CSV — the subset of `middleware/upload.js`'s `ALLOWED` map that has a registered signature sniffer. Video types are sniffable too but intentionally left out of the general-purpose file service.
+
+**Download:** never streamed through this server. `GET /:fileId/download` returns a 5-minute signed URL in the JSON envelope for the client to fetch directly (no redirect, so it never leaks into server logs/referrers).
 
 ### Routes & Scripts
 
@@ -202,7 +218,7 @@ These are architectural choices the framework intentionally leaves to the produc
 | 2 | **Input validation library** | ✅ Done — Zod is wired (`middleware/validate.js`, `validateBody(schema)` → 400 + `VALIDATION_ERROR` envelope on failure) and used at route level in `modules/auth/routes/authRoutes.js`. Add `validateBody(z.object({...}))` to new routes rather than inline checks. |
 | 3 | **Centralized error handler** | ✅ Done — global error middleware in `server.js`: JSON 404, multer errors → 400, `SERVER_ERROR` fallback. Add per-domain error mappers here. |
 | 4 | **Prisma Accelerate** | Not active. Enable by calling `prisma.$extends(withAccelerate())` in `config/dbConnect.js`. |
-| 5 | **Cloudinary vs S3 routing** | Both configured. Decide per asset type: S3 for docs/exports, Cloudinary for images/media. Encode in a `helpers/storage.js`. |
+| 5 | **Cloudinary vs S3 routing** | Resolved for the generic file service: S3 via `helpers/fileStorage.js` (Cloudinary is transform/CDN-focused for images specifically, not a fit for arbitrary tenant files). Cloudinary remains an unwired config slot — wire it directly for an image-specific product feature (avatars, thumbnails) if one is added later. |
 | 6 | **Email transport helper** | ✅ Done — `helpers/emailService.js` (SMTP via nodemailer, SES-compatible; dev-mode log). Password-reset OTP flow wired. |
 | 7 | **Structured logging** | ✅ Done — pino logger + per-request IDs in `server.js`. Wire transports (CloudWatch, Datadog) if log aggregation needed. |
 | 8 | **Test framework** | ✅ Done — `node:test` (backend, `npm test`) + Vitest (frontend, `npm test`). CI gates both in `.github/workflows/ci.yml`. |

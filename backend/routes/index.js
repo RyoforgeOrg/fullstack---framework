@@ -19,6 +19,10 @@ router.use('/common/auth', authRoutes);
 const organizationRoutes = require('../modules/organizations/routes/organizationRoutes');
 router.use('/orgs', verifyToken, organizationRoutes);
 
+// ── Files (tenant-owned object storage; org-scoped) ────────────────────────────
+const fileRoutes = require('../modules/files/routes/fileRoutes');
+router.use('/orgs/:orgId/files', verifyToken, fileRoutes);
+
 // ── Add your product's modules below ──────────────────────────────────────────
 // const exampleRoutes = require('../modules/example/routes/exampleRoutes');
 // router.use('/admin/example', verifyToken, role('admin'), exampleRoutes);
