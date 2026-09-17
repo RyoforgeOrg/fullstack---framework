@@ -24,6 +24,8 @@ import { lazy, Suspense } from 'react'
 
 // ── Page imports — add yours here (lazy = code-split per route) ─────────────
 const LoginPage          = lazy(() => import('./pages/auth/LoginPage'))
+const RegisterPage       = lazy(() => import('./pages/auth/RegisterPage'))
+const VerifyEmailPage    = lazy(() => import('./pages/auth/VerifyEmailPage'))
 const ForgotPasswordPage = lazy(() => import('./pages/auth/ForgotPasswordPage'))
 const ResetPasswordPage  = lazy(() => import('./pages/auth/ResetPasswordPage'))
 const DashboardPage      = lazy(() => import('./pages/dashboard/DashboardPage'))
@@ -48,6 +50,10 @@ function AppRoutes() {
       <Routes>
         {/* ── Public ──────────────────────────────────────────────────────────── */}
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+        {/* Landing page for the emailed confirmation link — unauthenticated on
+            purpose: the link is opened from a mail client with no session. */}
+        <Route path="/verify-email/:token" element={<VerifyEmailPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         {/* <Route path="/public/*" element={<PublicPage />} /> */}

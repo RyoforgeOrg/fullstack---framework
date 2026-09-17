@@ -51,9 +51,17 @@ export default function LoginPage() {
       subtitle="Sign in to your account to continue"
       error={error}
       footer={
-        <Link to="/forgot-password" className="text-orange-300 hover:text-orange-200 transition-colors">
-          Forgot your password?
-        </Link>
+        <div className="space-y-2">
+          <Link to="/forgot-password" className="block text-orange-300 hover:text-orange-200 transition-colors">
+            Forgot your password?
+          </Link>
+          <span className="block text-white/50">
+            New here?{' '}
+            <Link to="/register" className="text-orange-300 hover:text-orange-200 transition-colors">
+              Create an account
+            </Link>
+          </span>
+        </div>
       }
     >
       <form onSubmit={handleSubmit} className="space-y-4">

@@ -75,15 +75,20 @@ A **SaaS scaffold** built on a proven stack. Use it to bootstrap new SaaS produc
 │   │   ├── rateLimit.js     # createLimiter() factory + preset limiters
 │   │   ├── upload.js        # multer memoryStorage 5 MB
 │   │   ├── tenantContext.js # :orgId param / X-Organization-Id → req.organizationId + req.membership
-│   │   └── requireOrgRole.js# requireOrgRole(...roles) + ORG_PERMISSIONS matrix
+│   │   ├── requireOrgRole.js# requireOrgRole(...roles) + ORG_PERMISSIONS matrix
+│   │   └── requireVerifiedEmail.js # gates org creation on a confirmed email
 │   │
 │   ├── modules/
 │   │   ├── auth/
-│   │   │   ├── routes/authRoutes.js    # login, refresh, me, logout, profile, pwd reset
+│   │   │   ├── routes/authRoutes.js    # login, refresh, me, logout, profile, pwd reset,
+│   │   │   │                           # register, verify-email, sessions, change-password
 │   │   │   └── services/AuthService.js # full auth logic
-│   │   └── organizations/
-│   │       ├── routes/organizationRoutes.js      # /orgs CRUD, members, invitations
-│   │       └── services/OrganizationService.js   # org + membership + invitation logic
+│   │   ├── organizations/
+│   │   │   ├── routes/organizationRoutes.js      # /orgs CRUD, members, invitations
+│   │   │   └── services/OrganizationService.js   # org + membership + invitation logic
+│   │   └── users/
+│   │       ├── routes/userRoutes.js    # PATCH /admin/users/:userId/status (superAdmin)
+│   │       └── services/UserService.js # platform-level suspend / reactivate
 │   │
 │   ├── routes/
 │   │   └── index.js         # Central router — add module mounts here
@@ -318,6 +323,11 @@ wsClient.onChannel('user:' + userId, (payload) => ...);  // auto-connects
 | Scoping a tenant-owned query | `backend/helpers/tenantScope.js` — `scopedWhere(req, extra)`, mandatory |
 | Organization API | `backend/modules/organizations/` |
 | Organization context (frontend) | `frontend/src/contexts/OrganizationContext.jsx` — active org is per-TAB (`sessionStorage`) |
+| Signup + email verification | `backend/modules/auth/services/AuthService.js` (`register`, `verifyEmail`) — token is opaque, sha256-hashed in Redis, 24h TTL, consumed with an atomic `GETDEL` |
+| Email-verification gate | `backend/middleware/requireVerifiedEmail.js` — gates org creation ONLY, never login. Flip the policy there |
+| Device sessions | `backend/modules/auth/services/AuthService.js` (`listSessions`, `revokeSession`, `revokeAllSessions`) — a live session == a non-revoked, non-expired `RefreshToken` row |
+| Password change vs reset | `changePassword` re-issues the caller a fresh token pair and cuts off every OTHER device; `resetPassword` kills everything unconditionally (see the comments on both) |
+| Account suspension (platform) | `backend/modules/users/` — `role('superAdmin')`, NOT org-scoped. Kills live JWTs and live WS sockets |
 | Common UI | `frontend/src/components/common/index.js` |
 | Design templates | `frontend/src/components/designs/` (10 landing-page templates, TSX) |
 | File statuses + open decisions | `SOURCE-MAPPING.md` |

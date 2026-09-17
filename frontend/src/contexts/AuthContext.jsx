@@ -79,13 +79,44 @@ export const AuthProvider = ({ children }) => {
     return profile
   }
 
+  // Both of these bump the user's tokenVersion server-side, which kills EVERY
+  // access token — including the one this tab is holding. The backend hands back
+  // a freshly minted pair for the caller (and rotates the refresh cookie), so
+  // adopt it here or the very next request would 401 its way through recovery.
+  const changePassword = async ({ currentPassword, newPassword }) => {
+    const result = await api.common.changePassword({ currentPassword, newPassword })
+    setAuthSession({ token: result.token, user: result.user })
+    setUser(result.user)
+    return result
+  }
+
+  const revokeAllSessions = async () => {
+    const result = await api.common.sessions.revokeAll()
+    setAuthSession({ token: result.token, user: result.user })
+    setUser(result.user)
+    return result
+  }
+
+  // The /me payload carries emailVerifiedAt; re-reading it is how the UI learns a
+  // pending verification has landed without a full sign-out/sign-in cycle.
+  const refreshUser = async () => {
+    const profile = await api.common.me()
+    setUser(profile)
+    setStoredUser(profile)
+    return profile
+  }
+
   const value = {
     user,
     loading,
     login,
     logout,
     updateProfile,
-    isAuthenticated: !!user,
+    changePassword,
+    revokeAllSessions,
+    refreshUser,
+    isAuthenticated:  !!user,
+    isEmailVerified:  !!user?.emailVerifiedAt,
     hasRole:         (...roles) => roles.includes(user?.role),
     isReadOnly:      () => user?.accessLevel === 'read_only',
   }

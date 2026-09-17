@@ -56,8 +56,15 @@ async function makeUser(prefix) {
   const userName = uniq(prefix);
   const email    = `${userName}@test.local`;
   const password = 'Str0ng!Passw0rd';
+  // emailVerifiedAt is seeded because creating an organization is gated on a
+  // confirmed address (middleware/requireVerifiedEmail.js). These actors model
+  // real, onboarded users; the unverified path is covered in
+  // tests/onboardingSessions.integration.test.js.
   const user = await prisma.user.create({
-    data: { userName, email, name: 'Org Test', password: bcrypt.hashSync(password, 12), role: 'admin' },
+    data: {
+      userName, email, name: 'Org Test', password: bcrypt.hashSync(password, 12),
+      role: 'admin', emailVerifiedAt: new Date(),
+    },
   });
   const login = await request.post('/api/v1/common/auth/login').send({ userName, password });
   assert.strictEqual(login.status, 200, 'seed user should be able to log in');

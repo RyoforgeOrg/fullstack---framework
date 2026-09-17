@@ -3,7 +3,7 @@
 // MainLayout/MobileLayout shells (see AppShell) — replace this body with real
 // widgets once the product has some.
 import { useAuth } from '../../contexts/AuthContext'
-import { Card, OrganizationSwitcher } from '../../components/common'
+import { Card, OnboardingPrompt, OrganizationSwitcher } from '../../components/common'
 
 export default function DashboardPage() {
   const { user } = useAuth()
@@ -21,6 +21,9 @@ export default function DashboardPage() {
         </div>
         <OrganizationSwitcher />
       </div>
+
+      {/* Renders nothing once the account is verified and has an organization. */}
+      <OnboardingPrompt />
 
       <Card title="No widgets configured yet">
         This dashboard has no product widgets wired up yet. Add your own via
