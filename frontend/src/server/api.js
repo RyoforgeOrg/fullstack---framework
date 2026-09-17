@@ -354,6 +354,18 @@ const api = {
     delete: ({ orgId }) => request('DELETE', '/orgs/:orgId', { orgId }),
   },
 
+  // Billing / subscription. All org-scoped — :orgId in the path makes api.js
+  // send the matching X-Organization-Id automatically.
+  // checkout/portal return a Stripe-hosted URL the caller must redirect to
+  // (window.location.href = url); they do NOT change the plan themselves — the
+  // backend only grants a plan when Stripe's webhook confirms payment.
+  billing: {
+    get:      ({ orgId })          => request('GET',  '/orgs/:orgId/billing',          { orgId }),
+    checkout: ({ orgId, planKey }) => request('POST', '/orgs/:orgId/billing/checkout', { orgId }, {}, { planKey }),
+    portal:   ({ orgId })          => request('POST', '/orgs/:orgId/billing/portal',   { orgId }, {}, {}),
+    invoices: ({ orgId })          => request('GET',  '/orgs/:orgId/billing/invoices', { orgId }),
+  },
+
   // Add your product's domain namespaces below:
   // admin: {
   //   users: {

@@ -17,6 +17,7 @@ const apiResponse = require('../../../helpers/apiResponse');
 const { auditLogger }     = require('../../../helpers/auditLogger');
 const { scopedWhere }     = require('../../../helpers/tenantScope');
 const { sendOrgInvitation } = require('../../../helpers/emailService');
+const { createFreeSubscription } = require('../../billing/services/BillingService'); // A05
 
 const INVITE_TTL_DAYS = 7;
 
@@ -76,6 +77,10 @@ async function createOrganization(req, res) {
           joinedAt:       new Date(),
         },
       });
+      // ── billing (A05) ── every org starts on the free plan. Inside this
+      // transaction on purpose: an org must never exist without a subscription
+      // row, or entitlement lookups have nothing to read.
+      await createFreeSubscription(tx, org.id);
       return org;
     });
   } catch (error) {

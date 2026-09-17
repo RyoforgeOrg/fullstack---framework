@@ -117,6 +117,7 @@ model Organization {
 
   memberships Membership[]
   invitations Invitation[]
+  subscription Subscription?
 }
 
 model Membership {
@@ -166,6 +167,90 @@ model Invitation {
   // nicer error message, not a concurrency guarantee.
   @@index([organizationId])
   @@index([tokenHash])
+}
+
+// ── Billing (Plan / Subscription / ProcessedWebhookEvent) ────────────────────
+//
+// Stripe is the PAYMENT system of record: full invoice/charge history, proration
+// maths and dunning all live there and are NOT mirrored here. These tables hold
+// only what the app must answer synchronously on every request — "which plan is
+// this org on, and is it paying?" — so an entitlement check never makes a
+// network call to stripe.com.
+//
+// `status` deliberately reuses STRIPE'S OWN vocabulary (trialing/active/past_due/
+// canceled/incomplete). Webhook handling is then a direct copy of
+// `subscription.status`, not a translation table that drifts the first time
+// Stripe adds a state.
+
+enum SubscriptionStatus {
+  trialing
+  active
+  past_due
+  canceled
+  incomplete
+}
+
+model Plan {
+  id                String  @id @default(cuid())
+  // The stable identifier application code branches on ('free', 'pro', …).
+  // Code must NEVER branch on Plan.id (cuid, differs per environment) or on
+  // stripePriceId (rotates whenever pricing changes in the Stripe dashboard).
+  key               String  @unique
+  name              String
+  priceMonthlyCents Int     @default(0)
+  // Null for the free plan — there is nothing to check out.
+  stripePriceId     String?
+  // feature-key → limit (Int) or capability (Bool), e.g.
+  //   { "maxMembers": 5, "maxFiles": 100, "apiAccess": false }
+  // A Json blob rather than a Feature/PlanFeature join: plan contents change by
+  // editing a row, and no query ever filters or joins ON a feature.
+  // Convention: a numeric limit of -1 means unlimited (see helpers/entitlements.js).
+  features          Json     @default("{}")
+  createdAt         DateTime @default(now())
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id             String             @id @default(cuid())
+  // Unique: exactly ONE row per organization, UPDATED in place as the status
+  // changes. Subscription history is not modelled here — Stripe keeps it, and a
+  // local append-only mirror would need its own "which row is current?" logic
+  // for no gain. Every org has a row (free plan) from the moment it is created,
+  // so entitlement lookups never have to cope with "no subscription yet".
+  organizationId String             @unique
+  planId         String
+  stripeCustomerId     String?
+  stripeSubscriptionId String?      @unique
+  status         SubscriptionStatus @default(active)
+  currentPeriodEnd DateTime?
+  trialEndsAt      DateTime?
+  // Out-of-order webhook watermark: the `created` timestamp of the newest Stripe
+  // event already applied to this row. Stripe does not guarantee delivery order,
+  // so a retried older event can arrive after a newer one — without this, a
+  // redelivered `past_due` would clobber an `active` the org already paid for.
+  lastEventAt    DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         Plan         @relation(fields: [planId], references: [id])
+
+  @@index([planId])
+  @@index([stripeCustomerId])
+}
+
+model ProcessedWebhookEvent {
+  // Stripe's own event id (evt_...) as the PK — the insert IS the idempotency
+  // claim: a duplicate delivery hits the primary-key conflict and is skipped
+  // without ever reaching the handler. Chosen over a Redis SET because
+  // "exactly once" must survive a Redis flush, and because the claim has to be
+  // in the SAME transaction as the state change it guards.
+  eventId     String   @id
+  type        String
+  processedAt DateTime @default(now())
+
+  @@index([processedAt])
 }
 
 // ── Product Models ────────────────────────────────────────────────────────────

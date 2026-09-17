@@ -76,14 +76,20 @@ A **SaaS scaffold** built on a proven stack. Use it to bootstrap new SaaS produc
 │   │   ├── upload.js        # multer memoryStorage 5 MB
 │   │   ├── tenantContext.js # :orgId param / X-Organization-Id → req.organizationId + req.membership
 │   │   └── requireOrgRole.js# requireOrgRole(...roles) + ORG_PERMISSIONS matrix
+│   │                        # (plan gating: helpers/entitlements.js → requireEntitlement(key))
 │   │
 │   ├── modules/
 │   │   ├── auth/
 │   │   │   ├── routes/authRoutes.js    # login, refresh, me, logout, profile, pwd reset
 │   │   │   └── services/AuthService.js # full auth logic
-│   │   └── organizations/
-│   │       ├── routes/organizationRoutes.js      # /orgs CRUD, members, invitations
-│   │       └── services/OrganizationService.js   # org + membership + invitation logic
+│   │   ├── organizations/
+│   │   │   ├── routes/organizationRoutes.js      # /orgs CRUD, members, invitations
+│   │   │   └── services/OrganizationService.js   # org + membership + invitation logic
+│   │   └── billing/
+│   │       ├── routes/billingRoutes.js           # /orgs/:orgId/billing, checkout, portal, invoices
+│   │       ├── routes/stripeWebhookRoutes.js     # /webhooks/stripe — raw body, mounted in server.js
+│   │       ├── services/BillingService.js        # plan read, Stripe sessions, free-sub org hook
+│   │       └── services/StripeWebhookService.js  # idempotent, out-of-order-safe event processing
 │   │
 │   ├── routes/
 │   │   └── index.js         # Central router — add module mounts here
@@ -317,6 +323,10 @@ wsClient.onChannel('user:' + userId, (payload) => ...);  // auto-connects
 | Org permission matrix | `backend/middleware/requireOrgRole.js` (`ORG_PERMISSIONS`) |
 | Scoping a tenant-owned query | `backend/helpers/tenantScope.js` — `scopedWhere(req, extra)`, mandatory |
 | Organization API | `backend/modules/organizations/` |
+| Billing / subscriptions | `backend/modules/billing/` |
+| Plan feature gating | `backend/helpers/entitlements.js` — `requireEntitlement('key')`, fails closed, `-1` = unlimited |
+| Stripe SDK boundary | `backend/helpers/billingProvider.js` — the only file importing `stripe`; `setBillingProvider()` injects a fake in tests |
+| Payment webhook | `POST /api/v1/webhooks/stripe`, mounted in `server.js` **before** `express.json()` (raw body needed for HMAC) |
 | Organization context (frontend) | `frontend/src/contexts/OrganizationContext.jsx` — active org is per-TAB (`sessionStorage`) |
 | Common UI | `frontend/src/components/common/index.js` |
 | Design templates | `frontend/src/components/designs/` (10 landing-page templates, TSX) |
