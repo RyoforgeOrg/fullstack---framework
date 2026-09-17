@@ -20,6 +20,7 @@
 const express     = require('express');
 const router      = express.Router();
 const tenantContext = require('../../../middleware/tenantContext');
+const requireVerifiedEmail = require('../../../middleware/requireVerifiedEmail');
 const { requireOrgRole, ORG_PERMISSIONS } = require('../../../middleware/requireOrgRole');
 const { validateBody, z } = require('../../../middleware/validate');
 const {
@@ -63,7 +64,11 @@ const updateOrgSchema = z.object({
 }).refine((v) => Object.keys(v).length > 0, { message: 'Provide at least one field to update' });
 
 // ── User-scoped ───────────────────────────────────────────────────────────────
-router.post('/', validateBody(createSchema), createOrganization);
+// Creating an org is the ONE action gated on a confirmed email address — it is the
+// first thing a new account does that becomes durable and can send invitations.
+// Accepting an invitation deliberately is NOT gated: the inviter already vouched
+// for the address. See middleware/requireVerifiedEmail.js.
+router.post('/', requireVerifiedEmail, validateBody(createSchema), createOrganization);
 router.get('/',  listOrganizations);
 // Declared before the /:orgId block so "invitations" is never read as an org id.
 router.post('/invitations/:token/accept', acceptInvitation);

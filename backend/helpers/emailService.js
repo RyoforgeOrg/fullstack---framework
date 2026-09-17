@@ -74,4 +74,18 @@ async function sendOrgInvitation(to, orgName, inviteLink) {
   return sendMail(to, subject, html, `You have been invited to join ${orgName}. Accept: ${inviteLink}`);
 }
 
-module.exports = { sendMail, sendPasswordResetOtp, sendOrgInvitation };
+/**
+ * Send an email-verification link for a newly registered account.
+ * @param {string} to          the address being verified
+ * @param {string} verifyLink  absolute URL carrying the raw opaque token
+ * @param {number} ttlHours
+ */
+async function sendEmailVerification(to, verifyLink, ttlHours) {
+  const subject = 'Confirm your email address';
+  const html    = `<p>Welcome! Confirm your email address to finish setting up your account.</p>
+<p><a href="${verifyLink}">Confirm my email</a></p>
+<p>This link works once and expires in ${ttlHours} hours. If you did not create an account, ignore this email.</p>`;
+  return sendMail(to, subject, html, `Confirm your email address: ${verifyLink} (expires in ${ttlHours} hours)`);
+}
+
+module.exports = { sendMail, sendPasswordResetOtp, sendOrgInvitation, sendEmailVerification };

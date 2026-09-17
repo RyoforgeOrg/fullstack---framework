@@ -13,7 +13,7 @@ const { client }  = require('../../../config/redisConfig');
 const apiResponse = require('../../../helpers/apiResponse');
 const { generateToken, generateRefreshToken } = require('../../../helpers/generateToken');
 const { auditLogger } = require('../../../helpers/auditLogger');
-const { sendPasswordResetOtp } = require('../../../helpers/emailService');
+const { sendPasswordResetOtp, sendEmailVerification } = require('../../../helpers/emailService');
 const bcrypt      = require('bcrypt');
 const crypto      = require('crypto');
 const otpGenerator = require('otp-generator');
@@ -24,6 +24,14 @@ const REFRESH_TTL_DAYS      = 7;
 const RESET_OTP_TTL_MINS    = 10;
 const MAX_OTP_ATTEMPTS      = 5;
 const RESEND_COOLDOWN_SECS  = 60;
+const VERIFY_TTL_HOURS      = 24;
+
+// Platform role handed to a self-serve signup. This is the PLATFORM role
+// (middleware/role.js), deliberately NOT 'superAdmin': what a signed-up user can
+// do inside a tenant is governed by their Membership role (requireOrgRole), and
+// platform-admin actions (see modules/users) are reserved for accounts created by
+// scripts/createSuperAdmin.js.
+const SIGNUP_ROLE = 'admin';
 
 // Email is the Redis key material AND the DB lookup field — normalize once,
 // everywhere, so key generation and lookup can never diverge (e.g. " A@B.com"
@@ -33,6 +41,15 @@ const normalizeEmail = (email) => String(email).trim().toLowerCase();
 const RESET_OTP_KEY      = (email) => `auth:reset:otp:${email}`;
 const RESET_ATTEMPTS_KEY = (email) => `auth:reset:attempts:${email}`;
 const RESET_RESEND_KEY   = (email) => `auth:reset:resend:${email}`;
+// Email-verification tokens follow the Redis/TTL pattern the reset OTP uses, not
+// the Invitation table pattern: like an OTP they are short-lived, single-purpose
+// and worthless once consumed, so there is nothing to audit afterwards (the
+// emailVerifiedAt column IS the durable record) and the TTL does the cleanup that
+// an Invitation row would need a sweeper for. Keyed BY THE TOKEN HASH so the
+// emailed link is the whole lookup key — the raw token is never stored, exactly
+// like RefreshToken.tokenHash and Invitation.tokenHash.
+const VERIFY_TOKEN_KEY   = (tokenHash) => `auth:verify:${tokenHash}`;
+const VERIFY_RESEND_KEY  = (email) => `auth:verify:resend:${email}`;
 
 const hashToken = (token) =>
   crypto.createHash('sha256').update(token).digest('hex');
@@ -90,10 +107,13 @@ function buildUserPayload(user) {
     phone:       user.phone || null,
     role:        user.role,
     accessLevel: user.accessLevel,
+    // Exposed (rather than gating login) so the UI can prompt for verification —
+    // see middleware/requireVerifiedEmail.js for the full product decision.
+    emailVerifiedAt: user.emailVerifiedAt || null,
   };
 }
 
-async function storeRefreshToken(userId, token, req, db = prisma) {
+async function storeRefreshToken(userId, token, req, db = prisma, lastUsedAt = null) {
   const expiresAt = new Date(Date.now() + REFRESH_TTL_DAYS * 24 * 60 * 60 * 1000);
   await db.refreshToken.create({
     data: {
@@ -102,6 +122,7 @@ async function storeRefreshToken(userId, token, req, db = prisma) {
       deviceInfo: req.headers['user-agent']?.slice(0, 255) || null,
       ipAddress:  req.ip || null,
       expiredAt:  expiresAt,
+      lastUsedAt,
     },
   });
 }
@@ -229,7 +250,9 @@ async function refreshToken(req, res) {
 
       const newAccessToken  = generateToken(user);
       const newRefreshToken = generateRefreshToken();
-      await storeRefreshToken(user.id, newRefreshToken, req, tx);
+      // The replacement row inherits "this device is live right now" — the row it
+      // replaces is revoked, so the session list only ever sees this one.
+      await storeRefreshToken(user.id, newRefreshToken, req, tx, new Date());
 
       return { token: newAccessToken, refreshToken: newRefreshToken };
     });
@@ -420,4 +443,291 @@ async function resetPassword(req, res) {
   }
 }
 
-module.exports = { login, refreshToken, logout, me, updateProfile, forgotPassword, resetPassword };
+// ── Registration + email verification (A03) ───────────────────────────────────
+
+function verifyLinkFor(rawToken) {
+  const base = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
+  return `${base}/verify-email/${rawToken}`;
+}
+
+// Mints an opaque token, stores ONLY its sha256 (value = the user id) under a TTL,
+// and emails the raw token. Consumption is a single atomic Redis GETDEL — the same
+// "only the first caller can ever see it" guarantee as the reset OTP's Lua
+// consume, which needs Lua only because it also has to compare a submitted value.
+// A resend does not invalidate earlier tokens; they simply expire.
+async function issueEmailVerification(user) {
+  const rawToken = crypto.randomBytes(48).toString('base64url');
+  await client.set(VERIFY_TOKEN_KEY(hashToken(rawToken)), user.id, { EX: VERIFY_TTL_HOURS * 60 * 60 });
+  // A failing SMTP send must not 500 the caller — the account exists and the link
+  // can be re-requested. Mirrors forgotPassword's handling.
+  try {
+    await sendEmailVerification(user.email, verifyLinkFor(rawToken), VERIFY_TTL_HOURS);
+  } catch (sendErr) {
+    console.error('[AuthService] verification email failed:', sendErr.message);
+  }
+}
+
+// ── Register ──────────────────────────────────────────────────────────────────
+// ANTI-ENUMERATION STANCE: unlike login and forgot-password, this endpoint DOES
+// tell the caller that an email is already registered. That is the normal,
+// expected signup UX (GitHub, Stripe, Slack all do it) and hiding it would force
+// a "check your email" dead end on a user who simply forgot they have an account.
+// What it must NOT leak is anything ABOUT that account — no name, no role, no
+// auth provider, no verification state. The message below is the whole disclosure.
+async function register(req, res) {
+  try {
+    const email    = normalizeEmail(req.body.email);
+    const { password, name } = req.body;
+
+    // The framework's login identifier is `userName`; a self-serve signup has no
+    // separate handle to offer, so the email IS the username (matching the
+    // "you@example.com" placeholder on the login form). A product that wants
+    // distinct handles should take one in the body and use it here instead.
+    const hashed = await bcrypt.hash(password, 12);
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: { userName: email, email, name, password: hashed, role: SIGNUP_ROLE },
+      });
+    } catch (error) {
+      // The unique indexes on userName/email are the real guard — a pre-check
+      // would be a TOCTOU race between two concurrent signups of the same address.
+      if (error.code === 'P2002') {
+        return apiResponse.send(res, 'CONFLICT', { message: 'That email is already registered.' });
+      }
+      throw error;
+    }
+
+    await issueEmailVerification(user);
+    await auditLogger('USER_REGISTERED', user, req);
+
+    // No session is issued here: the account is created unverified and the user
+    // logs in explicitly, so a registration request can never hand out a session
+    // for an address whose owner has not been reached yet.
+    return apiResponse.send(res, 'CREATED', {
+      user:    buildUserPayload(user),
+      message: 'Account created. Check your email for a confirmation link.',
+    });
+  } catch (error) {
+    console.error('[AuthService.register]', error);
+    return apiResponse.send(res, 'SERVER_ERROR');
+  }
+}
+
+// ── Verify email ──────────────────────────────────────────────────────────────
+// Public (no verifyToken): the link is opened from an email client that carries no
+// session. The token itself is the proof.
+async function verifyEmail(req, res) {
+  try {
+    const INVALID = { message: 'This confirmation link is invalid or has expired.' };
+    const userId  = await client.getDel(VERIFY_TOKEN_KEY(hashToken(req.params.token)));
+    if (!userId) return apiResponse.send(res, 'INVALID_REQUEST', INVALID);
+
+    const user = await prisma.user.findFirst({ where: { id: userId, isDeleted: false } });
+    if (!user) return apiResponse.send(res, 'INVALID_REQUEST', INVALID);
+
+    // Idempotent: a second (still-unexpired) token for an already-verified account
+    // succeeds rather than erroring, and does not move the original timestamp.
+    if (!user.emailVerifiedAt) {
+      await prisma.user.update({ where: { id: user.id }, data: { emailVerifiedAt: new Date() } });
+      await auditLogger('EMAIL_VERIFIED', user, req);
+    }
+
+    return apiResponse.send(res, 'SUCCESS', { message: 'Email confirmed. You can sign in now.' });
+  } catch (error) {
+    console.error('[AuthService.verifyEmail]', error);
+    return apiResponse.send(res, 'SERVER_ERROR');
+  }
+}
+
+// ── Resend verification ───────────────────────────────────────────────────────
+// Public and anti-enumerating (always SUCCESS), because unlike /register this one
+// is a probe oracle: it takes only an email and would otherwise answer "does an
+// unverified account exist for this address?" to anyone who asks.
+async function resendVerification(req, res) {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const user  = await prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' }, isDeleted: false },
+    });
+
+    const onCooldown = await client.get(VERIFY_RESEND_KEY(email));
+    if (user && !user.emailVerifiedAt && !onCooldown) {
+      await client.set(VERIFY_RESEND_KEY(email), '1', { EX: RESEND_COOLDOWN_SECS });
+      await issueEmailVerification(user);
+    }
+
+    return apiResponse.send(res, 'SUCCESS', {
+      message: 'If that address needs confirming, a new link has been sent.',
+    });
+  } catch (error) {
+    console.error('[AuthService.resendVerification]', error);
+    return apiResponse.send(res, 'SERVER_ERROR');
+  }
+}
+
+// ── Session / account management (A04) ────────────────────────────────────────
+
+const publicSession = (row, currentHash) => ({
+  id:         row.id,
+  device:     row.deviceInfo,
+  ipAddress:  row.ipAddress,
+  createdAt:  row.createdAt,
+  lastUsedAt: row.lastUsedAt,
+  expiredAt:  row.expiredAt,
+  // The caller's own session, identified by the refresh cookie on THIS request.
+  current:    !!currentHash && row.tokenHash === currentHash,
+});
+
+const currentTokenHash = (req) => {
+  const token = req.cookies?.[REFRESH_COOKIE_NAME] || req.body?.refreshToken;
+  return token ? hashToken(token) : null;
+};
+
+// ── GET /sessions ─────────────────────────────────────────────────────────────
+// Live sessions == refresh-token rows that are neither revoked nor expired; see
+// the RefreshToken model comment for why that set is exactly one row per device.
+// tokenHash is used for the `current` comparison and never leaves the server.
+async function listSessions(req, res) {
+  try {
+    const rows = await prisma.refreshToken.findMany({
+      where:   { userId: req.user.id, revoked: false, expiredAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+    });
+    const currentHash = currentTokenHash(req);
+    return apiResponse.send(res, 'SUCCESS', { sessions: rows.map(r => publicSession(r, currentHash)) });
+  } catch (error) {
+    console.error('[AuthService.listSessions]', error);
+    return apiResponse.send(res, 'SERVER_ERROR');
+  }
+}
+
+// ── DELETE /sessions/:sessionId ───────────────────────────────────────────────
+// Scoped by userId in the WHERE clause, so another user's session id simply
+// matches nothing — 404 without a separate ownership lookup that could leak
+// whether the id exists at all.
+async function revokeSession(req, res) {
+  try {
+    const target = await prisma.refreshToken.findFirst({
+      where: { id: req.params.sessionId, userId: req.user.id, revoked: false, expiredAt: { gt: new Date() } },
+    });
+    if (!target) return apiResponse.send(res, 'NOT_FOUND', { message: 'Session not found.' });
+
+    await prisma.refreshToken.updateMany({
+      where: { id: target.id, userId: req.user.id },
+      data:  { revoked: true },
+    });
+
+    // Revoking your own session is "log this device out": the cookie it just sent
+    // is now dead, so clear it rather than leaving a stale one to 401 later.
+    if (target.tokenHash === currentTokenHash(req)) clearRefreshCookie(res);
+
+    await auditLogger('SESSION_REVOKED', req.user, req);
+    return apiResponse.send(res, 'SUCCESS', { message: 'Session revoked.' });
+  } catch (error) {
+    console.error('[AuthService.revokeSession]', error);
+    return apiResponse.send(res, 'SERVER_ERROR');
+  }
+}
+
+// Revoke EVERY session, bump tokenVersion, then immediately mint a fresh pair for
+// the caller — the "all except current" shape, expressed as revoke-all-and-reissue.
+//
+// Why not "revoke all WHERE tokenHash != mine": that leaves every other device's
+// still-unexpired ACCESS token (24h) working, because only a tokenVersion bump
+// kills those — and a selective bump is impossible, tokenVersion is per user.
+// Bumping and re-issuing gives other devices an immediate hard stop (verifyToken
+// and the WS hub's validateIdentity both compare tokenVersion) while the caller
+// keeps working, which is the whole point of "except current".
+//
+// Same lockUserRow() discipline as logout/resetPassword: a concurrent /refresh
+// either completes before this transaction or observes its final state, so it can
+// never slip a live token past the revoke-all.
+async function revokeOthersAndReissue(req, userId, userData = {}) {
+  return prisma.$transaction(async (tx) => {
+    await lockUserRow(tx, userId);
+    await tx.refreshToken.updateMany({ where: { userId, revoked: false }, data: { revoked: true } });
+    const user = await tx.user.update({
+      where: { id: userId },
+      data:  { ...userData, tokenVersion: { increment: 1 } },
+    });
+    const newRefreshToken = generateRefreshToken();
+    await storeRefreshToken(userId, newRefreshToken, req, tx);
+    return { user, token: generateToken(user), refreshToken: newRefreshToken };
+  });
+}
+
+// ── POST /sessions/revoke-all ─────────────────────────────────────────────────
+async function revokeAllSessions(req, res) {
+  try {
+    const reissued = await revokeOthersAndReissue(req, req.user.id);
+    setRefreshCookie(res, reissued.refreshToken);
+    await auditLogger('SESSIONS_REVOKED_ALL', req.user, req);
+    return apiResponse.send(res, 'SUCCESS', {
+      token:        reissued.token,
+      refreshToken: reissued.refreshToken,
+      user:         buildUserPayload(reissued.user),
+      message:      'All other sessions have been signed out.',
+    });
+  } catch (error) {
+    console.error('[AuthService.revokeAllSessions]', error);
+    return apiResponse.send(res, 'SERVER_ERROR');
+  }
+}
+
+// ── POST /change-password ─────────────────────────────────────────────────────
+// Distinct from resetPassword: the caller is authenticated and proves knowledge of
+// the CURRENT password first.
+//
+// WHY THE SESSION SCOPE DIFFERS FROM A RESET:
+//   resetPassword is triggered by whoever holds the mailbox, which is exactly the
+//   situation where the account may ALREADY be compromised — so it kills every
+//   session unconditionally, including the one that asked, and the user signs in
+//   again from scratch.
+//   change-password is performed by someone who already holds a live session AND
+//   the current password. Signing that tab out proves nothing and just punishes
+//   routine password hygiene, so the caller is re-issued a fresh pair while every
+//   OTHER device is cut off immediately (tokenVersion bump + revoke-all).
+async function changePassword(req, res) {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user || !(await bcrypt.compare(currentPassword, user.password))) {
+      await auditLogger('PASSWORD_CHANGE_FAILED', req.user, req);
+      return apiResponse.send(res, 'UNAUTHORIZED', { message: 'Current password is incorrect.' });
+    }
+
+    const hashed   = await bcrypt.hash(newPassword, 12);
+    const reissued = await revokeOthersAndReissue(req, user.id, { password: hashed });
+    setRefreshCookie(res, reissued.refreshToken);
+
+    await auditLogger('PASSWORD_CHANGED', req.user, req);
+    return apiResponse.send(res, 'SUCCESS', {
+      token:        reissued.token,
+      refreshToken: reissued.refreshToken,
+      user:         buildUserPayload(reissued.user),
+      message:      'Password changed. Your other devices have been signed out.',
+    });
+  } catch (error) {
+    console.error('[AuthService.changePassword]', error);
+    return apiResponse.send(res, 'SERVER_ERROR');
+  }
+}
+
+module.exports = {
+  login,
+  refreshToken,
+  logout,
+  me,
+  updateProfile,
+  forgotPassword,
+  resetPassword,
+  register,
+  verifyEmail,
+  resendVerification,
+  listSessions,
+  revokeSession,
+  revokeAllSessions,
+  changePassword,
+};

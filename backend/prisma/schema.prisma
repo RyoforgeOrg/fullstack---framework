@@ -29,6 +29,11 @@ model User {
   accessLevel          String         @default("read_write")
   active               Boolean        @default(true)
   isDeleted            Boolean        @default(false)
+  // null = email never verified. Self-serve registration always leaves this null;
+  // it is set by AuthService.verifyEmail when the emailed link is consumed.
+  // Seeded/admin-created accounts should be backfilled to now() if you want them
+  // to skip verification — the 0-row backfill in the migration is deliberate.
+  emailVerifiedAt      DateTime?
   tokenVersion         Int            @default(0)
   failedLoginAttempts  Int            @default(0)
   lockedUntil          DateTime?
@@ -49,6 +54,11 @@ model User {
   notifications        Notification[]
 }
 
+// One LIVE row per device session: rotation revokes the old row and inserts a new
+// one, so "the caller's active sessions" is exactly the set of rows that are
+// neither revoked nor expired (see AuthService.listSessions). That also means a
+// session's `id` CHANGES on every refresh — it is a handle for revoking a session
+// right now, not a stable identifier to persist client-side.
 model RefreshToken {
   id         String   @id @default(cuid())
   userId     String
@@ -58,6 +68,9 @@ model RefreshToken {
   revoked    Boolean  @default(false)
   expiredAt  DateTime
   createdAt  DateTime @default(now())
+  // Null on the row minted at login; set to the rotation time on every row minted
+  // by /refresh. Reads as "when this device last exchanged its refresh token".
+  lastUsedAt DateTime?
 
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 

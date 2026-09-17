@@ -337,6 +337,20 @@ const api = {
     updateProfile: (body) => request('POST', '/common/auth/profile/update', {}, {}, body),
     forgotPassword: (body) => request('POST', '/common/auth/forgot-password', {}, {}, body),
     resetPassword:  (body) => request('POST', '/common/auth/reset-password',  {}, {}, body),
+
+    // Onboarding. All three are public: skipAuthRecovery so a visitor with no
+    // session never triggers the refresh/clear dance on a plain 401.
+    register:           (body)    => request('POST', '/common/auth/register', {}, {}, body, { skipAuthRecovery: true, orgId: null }),
+    verifyEmail:        ({ token }) => request('POST', '/common/auth/verify-email/:token', { token }, {}, null, { skipAuthRecovery: true, orgId: null }),
+    resendVerification: (body)    => request('POST', '/common/auth/resend-verification', {}, {}, body, { skipAuthRecovery: true, orgId: null }),
+
+    // Session / account management (user-scoped — never send a tenant header).
+    sessions: {
+      list:      ()             => request('GET',    '/common/auth/sessions', {}, {}, null, { orgId: null }),
+      revoke:    ({ sessionId }) => request('DELETE', '/common/auth/sessions/:sessionId', { sessionId }, {}, null, { orgId: null }),
+      revokeAll: ()             => request('POST',   '/common/auth/sessions/revoke-all', {}, {}, null, { orgId: null }),
+    },
+    changePassword: (body) => request('POST', '/common/auth/change-password', {}, {}, body, { orgId: null }),
   },
 
   // Organizations / multi-tenancy. Calls that name an :orgId are tenant-scoped;
