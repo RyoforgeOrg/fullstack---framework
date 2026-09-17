@@ -48,9 +48,10 @@ Every file in this repo, what it does, and what you need to customize per produc
 
 | File | Status | What it does | What to customize |
 |------|--------|--------------|------------------|
-| `backend/prisma/schema.prisma` | 🔌 | `User`, `RefreshToken`, `AuditLog` base models + multi-tenancy (`Organization`, `Membership`, `Invitation`, enums `OrganizationStatus`/`MembershipRole`/`MembershipStatus`) + `File` (tenant-owned upload metadata, enum `FileStatus`) | Add domain models below the `── Product Models ──` marker. Every tenant-owned model MUST carry an indexed `organizationId` FK — see the tenancy contract comment above the `Organization` model |
+| `backend/prisma/schema.prisma` | 🔌 | `User`, `RefreshToken`, `AuditLog` base models + multi-tenancy (`Organization`, `Membership`, `Invitation`, enums `OrganizationStatus`/`MembershipRole`/`MembershipStatus`) + `File` (tenant-owned upload metadata, enum `FileStatus`) + `Notification` | Add domain models below the `── Product Models ──` marker. Every tenant-owned model MUST carry an indexed `organizationId` FK — see the tenancy contract comment above the `Organization` model |
 | `backend/prisma/migrations/20260911120000_add_organizations_and_memberships/` | ✅ | Creates the three tenancy tables + a **partial** unique index `Invitation_org_email_pending_key` (raw SQL — Prisma cannot express `WHERE`), enforcing one pending invitation per (org, email) | Re-add the partial index by hand if `prisma migrate dev` ever emits a DROP for it |
 | `backend/prisma/migrations/20260911130000_add_files/` | ✅ | Creates the `File` table (hand-written SQL, matching the org migration's pattern) + `FileStatus` enum + `organizationId`/`organizationId+status` indexes + cascade FKs to `Organization` and `User` | No changes needed |
+| `backend/prisma/migrations/20260911131000_add_notifications/` | ✅ | Creates the `Notification` table + `User.notificationPreferences` JSON column | No changes needed |
 | `backend/globals/response.json` | 🔌 | 14 response codes (1000–1014, 1009 retired) | Add product-specific codes if the base set doesn't cover your cases |
 
 ### Helpers
@@ -114,6 +115,15 @@ Every file in this repo, what it does, and what you need to customize per produc
 **Upload allowlist:** images (jpeg/png/webp/gif), PDF, legacy + OOXML office docs (doc/docx/xls/xlsx), CSV — the subset of `middleware/upload.js`'s `ALLOWED` map that has a registered signature sniffer. Video types are sniffable too but intentionally left out of the general-purpose file service.
 
 **Download:** never streamed through this server. `GET /:fileId/download` returns a 5-minute signed URL in the JSON envelope for the client to fetch directly (no redirect, so it never leaks into server logs/referrers).
+
+### Notifications Module
+
+| File | Status | What it does | What to customize |
+|------|--------|--------------|------------------|
+| `backend/modules/notifications/notificationCategories.js` | 🔌 | `type` → category grouping (`security`/`organization`/`product`) used for email opt-out; `security` is never opt-out-able | Add new `type`s to `TYPE_CATEGORY_MAP` as modules introduce them |
+| `backend/modules/notifications/services/NotificationService.js` | ✅ | `notify({ userId, organizationId?, type, title, body, data?, channels? })` — writes the `Notification` row, pushes it live on WS channel `user:<userId>`, enqueues `queue:notification-email` when requested + not opted out. Also `listNotifications`, `markRead`, `markAllRead`, `getPreferences`, `updatePreferences` | Call `notify()` from any module to raise a notification (see doc comment for intended `OrganizationService`/`AuthService` call sites once those modules land in this worktree) |
+| `backend/modules/notifications/routes/notificationRoutes.js` | ✅ | `GET /`, `PATCH /:id/read`, `POST /read-all`, `GET /preferences`, `PATCH /preferences` — user-scoped, `verifyToken` only | No changes needed |
+| `backend/workers/notificationEmailJobHandler.js` | ✅ | Worker handler for `queue:notification-email` — sends via `emailService`, updates `Notification.emailDeliveredAt`/`emailDeliveryError` | Registered in `worker.js` |
 
 ### Routes & Scripts
 
@@ -179,6 +189,7 @@ Every file in this repo, what it does, and what you need to customize per produc
 | `frontend/src/components/MainLayout.jsx` | 🔌 | Desktop sidebar shell | Define `NAV_ITEMS` array with your product's navigation |
 | `frontend/src/components/MobileLayout.jsx` | 🔌 | Mobile bottom-nav shell | Define `MOBILE_NAV_ITEMS` array |
 | `frontend/src/components/common/` | ✅ | 17 reusable UI primitives: Button, Input, Modal, Table, Card, Badge, Toast, Select, StatCard, SearchableSelect, PhoneInput, Calendar, Loading, ProfileModal, WelcomeBanner, Icon3D, useToast | No changes needed; extend individual components per product if needed |
+| `frontend/src/components/common/NotificationBell.jsx` | ✅ | Bell + dropdown inbox; loads via `api.notifications.list`, live-pushed via `useWebSocket('user:<id>', ...)`, mark-read/mark-all-read | No changes needed; wired into `MainLayout.jsx`/`MobileLayout.jsx` headers |
 
 ### Data & API
 

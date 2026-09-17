@@ -85,9 +85,13 @@ A **SaaS scaffold** built on a proven stack. Use it to bootstrap new SaaS produc
 │   │   ├── organizations/
 │   │   │   ├── routes/organizationRoutes.js      # /orgs CRUD, members, invitations
 │   │   │   └── services/OrganizationService.js   # org + membership + invitation logic
-│   │   └── files/
-│   │       ├── routes/fileRoutes.js    # /orgs/:orgId/files — upload, list, metadata, download URL, delete
-│   │       └── services/FileService.js # quota-enforced upload, tenant-scoped CRUD, soft delete
+│   │   ├── files/
+│   │   │   ├── routes/fileRoutes.js    # /orgs/:orgId/files — upload, list, metadata, download URL, delete
+│   │   │   └── services/FileService.js # quota-enforced upload, tenant-scoped CRUD, soft delete
+│   │   └── notifications/
+│   │       ├── notificationCategories.js  # type → category (security/organization/product)
+│   │       ├── routes/notificationRoutes.js
+│   │       └── services/NotificationService.js  # notify(), list/markRead/preferences
 │   │
 │   ├── routes/
 │   │   └── index.js         # Central router — add module mounts here
@@ -103,7 +107,8 @@ A **SaaS scaffold** built on a proven stack. Use it to bootstrap new SaaS produc
 │   ├── jobs/
 │   │   └── _stub.js         # Cron job template
 │   └── workers/
-│       └── _stub.js         # Background job handler template
+│       ├── _stub.js         # Background job handler template
+│       └── notificationEmailJobHandler.js  # queue:notification-email — sends via emailService
 │
 └── frontend/
     ├── server.js            # Express SPA server with OG meta injection
@@ -124,11 +129,13 @@ A **SaaS scaffold** built on a proven stack. Use it to bootstrap new SaaS produc
         │   ├── PrivateRoute.jsx
         │   ├── MainLayout.jsx   # Desktop sidebar — define NAV_ITEMS
         │   ├── MobileLayout.jsx # Mobile bottom nav — define MOBILE_NAV_ITEMS
-        │   └── common/          # 18 reusable UI primitives (incl. OrganizationSwitcher)
+        │   └── common/          # 19 reusable UI primitives (incl. OrganizationSwitcher, NotificationBell)
         ├── hooks/
-        │   └── useDataFetch.js  # Generic data fetch hook
+        │   ├── useDataFetch.js  # Generic data fetch hook
+        │   └── useWebSocket.js  # channel subscribe hook over server/ws.js
         ├── server/
-        │   └── api.js           # Single API gateway — all fetch() calls live here
+        │   ├── api.js            # Single API gateway — all fetch() calls live here
+        │   └── ws.js              # Shared WS client (wsClient) over the hub
         ├── utils/
         │   └── subdomain.js     # Subdomain detection (multi-tenant)
         └── pages/

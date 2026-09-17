@@ -36,11 +36,17 @@ model User {
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
+  // Per-category email opt-out for notifications (see
+  // backend/modules/notifications/notificationCategories.js). JSON, not a
+  // dedicated table — a handful of boolean flags per user doesn't earn a join.
+  notificationPreferences Json        @default("{}")
+
   refreshTokens        RefreshToken[]
   auditLogs            AuditLog[]
   memberships          Membership[]
   invitationsSent      Invitation[]   @relation("InvitationsSent")
   filesUploaded        File[]
+  notifications        Notification[]
 }
 
 model RefreshToken {
@@ -116,9 +122,10 @@ model Organization {
   createdAt DateTime           @default(now())
   updatedAt DateTime           @updatedAt
 
-  memberships Membership[]
-  invitations Invitation[]
-  files       File[]
+  memberships   Membership[]
+  invitations   Invitation[]
+  files         File[]
+  notifications Notification[]
 }
 
 model Membership {
@@ -168,6 +175,50 @@ model Invitation {
   // nicer error message, not a concurrency guarantee.
   @@index([organizationId])
   @@index([tokenHash])
+}
+
+// ── Notifications ──────────────────────────────────────────────────────────────
+//
+// One Notification row = one logical, per-user notification (the in-app inbox
+// record). It is NOT split into a separate per-channel delivery-log table:
+// today there are only two channels (in_app, email), in_app "delivery" IS the
+// row existing, and email delivery is at most a single attempt worth tracking
+// (retries live in the job queue's own attempt counter, not here) — so a
+// `emailDeliveredAt` / `emailDeliveryError` pair of columns on this row covers
+// it without the join a real delivery-log table would force on every list
+// query. Revisit if a notification ever needs >1 email attempt tracked
+// individually (e.g. digest re-sends) — that's when the second table earns
+// its keep.
+//
+// `type` is a free-form extensible string (see notificationCategories.js for
+// the type → category grouping used for email opt-out), not a Prisma enum,
+// so new modules can introduce new notification types without a migration.
+model Notification {
+  id                 String    @id @default(cuid())
+  userId             String
+  // Optional org context (e.g. "you were invited to X"). Nullable FK, ON DELETE
+  // SET NULL — a notification about a since-deleted org should still be visible
+  // in the recipient's inbox history, just without a live org to link back to.
+  organizationId     String?
+  type               String
+  title              String
+  body               String
+  data               Json?
+  // Which channel(s) this notification was meant for. Defaults to in_app only;
+  // NotificationService.notify() adds 'email' when the type/category calls for
+  // it and the recipient hasn't opted out.
+  channels           String[] @default(["in_app"])
+  readAt             DateTime?
+  emailDeliveredAt   DateTime?
+  emailDeliveryError String?
+  createdAt          DateTime  @default(now())
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@index([organizationId])
 }
 
 // ── Product Models ────────────────────────────────────────────────────────────

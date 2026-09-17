@@ -23,6 +23,10 @@ router.use('/orgs', verifyToken, organizationRoutes);
 const fileRoutes = require('../modules/files/routes/fileRoutes');
 router.use('/orgs/:orgId/files', verifyToken, fileRoutes);
 
+// ── Notifications (user-scoped — verifyToken only, no tenantContext) ──────────
+const notificationRoutes = require('../modules/notifications/routes/notificationRoutes');
+router.use('/common/notifications', verifyToken, notificationRoutes);
+
 // ── Add your product's modules below ──────────────────────────────────────────
 // const exampleRoutes = require('../modules/example/routes/exampleRoutes');
 // router.use('/admin/example', verifyToken, role('admin'), exampleRoutes);

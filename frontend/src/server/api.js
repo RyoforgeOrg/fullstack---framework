@@ -354,6 +354,14 @@ const api = {
     delete: ({ orgId }) => request('DELETE', '/orgs/:orgId', { orgId }),
   },
 
+  notifications: {
+    list:            (query = {}) => request('GET',   '/common/notifications', {}, query),
+    markRead:        ({ id })     => request('PATCH', '/common/notifications/:id/read', { id }),
+    readAll:         ()           => request('POST',  '/common/notifications/read-all'),
+    getPreferences:  ()           => request('GET',   '/common/notifications/preferences'),
+    updatePreferences: (body)     => request('PATCH', '/common/notifications/preferences', {}, {}, body),
+  },
+
   // Add your product's domain namespaces below:
   // admin: {
   //   users: {

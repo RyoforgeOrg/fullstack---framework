@@ -4,6 +4,7 @@
  */
 import { Outlet, NavLink } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import NotificationBell from './common/NotificationBell'
 
 // Define your product's mobile nav items here (keep to 4-5 max).
 // Shape: [{ label: string, path: string, icon: ReactNode, roles: string[] }]
@@ -20,6 +21,9 @@ export const MobileLayout = () => {
 
   return (
     <div className="flex flex-col h-screen bg-[#0B0B16]">
+      <header className="flex items-center justify-end px-4 py-2 border-b border-white/10">
+        <NotificationBell />
+      </header>
       <main className="flex-1 overflow-y-auto pb-16">
         <Outlet />
       </main>
