@@ -321,6 +321,17 @@ Optional pg pool tuning for `config/dbConnect.js` (all have working defaults):
 total = `DB_POOL_MAX` × api instances), `DB_CONNECTION_TIMEOUT_MS` (default 5000),
 `DB_IDLE_TIMEOUT_MS` (default 30000).
 
+Billing (`modules/billing`) reads two Stripe vars, both **lazily, per call**, so the
+app boots without them and only billing endpoints fail:
+`STRIPE_SECRET_KEY` (server-side API key — `sk_test_...` outside production) and
+`STRIPE_WEBHOOK_SECRET` (the signing secret of the webhook *endpoint*, different in
+test and live; without it `POST /api/v1/webhooks/stripe` rejects every delivery).
+The plan → Stripe price mapping deliberately lives in the **database**
+(`Plan.stripePriceId`, seeded NULL), not in env: price ids are created per
+environment in the Stripe dashboard, and hardcoding a test-mode id would ship it
+to production. Local testing:
+`stripe listen --forward-to localhost:3000/api/v1/webhooks/stripe`.
+
 ---
 
 ## Process Model

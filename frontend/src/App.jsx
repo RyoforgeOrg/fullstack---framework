@@ -29,6 +29,7 @@ const ResetPasswordPage  = lazy(() => import('./pages/auth/ResetPasswordPage'))
 const DashboardPage      = lazy(() => import('./pages/dashboard/DashboardPage'))
 const OrganizationSettingsPage = lazy(() => import('./pages/organization/OrganizationSettingsPage'))
 const DesignGallery      = lazy(() => import('./components/designs/Gallery'))
+const BillingPage        = lazy(() => import('./pages/billing/BillingPage'))
 
 // ── Role-default route helper (implement per product) ─────────────────────────
 // Replace the placeholder text below with real redirects once you have routes.
@@ -78,6 +79,9 @@ function AppRoutes() {
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/admin/dashboard" element={<DashboardPage />} />
         <Route path="/organization/settings" element={<OrganizationSettingsPage />} />
+        {/* Billing is org-scoped via the active organization, not the URL — the
+            page reads activeOrgId from OrganizationContext. */}
+        <Route path="/billing" element={<BillingPage />} />
       </Route>
       <Route
         element={
